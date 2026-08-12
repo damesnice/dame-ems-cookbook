@@ -49,10 +49,6 @@ function latestKeeper(family) {
   return pool[pool.length - 1];
 }
 
-function childCount(family, genId) {
-  return family.generations.filter((g) => g.parentId === genId).length;
-}
-
 // ---------- persistence ----------
 
 const STORAGE_KEY = "dame-ems-cookbook:families";
@@ -252,7 +248,6 @@ function Shelf({ families, onOpen, onNew }) {
         >
           {shown.map((f) => {
             const gen = latestKeeper(f);
-            const genNumber = f.generations.findIndex((g) => g.id === gen.id) + 1;
             return (
               <div
                 key={f.id}
@@ -428,15 +423,13 @@ function NewCulture({ onCreate, onCancel }) {
 
 // ---------- Recipe detail ----------
 
-function RecipeDetail({ family, genId, onSetGen, onViewTree, onLogCook, onBack, onRateGen }) {
+function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen }) {
   const gen = findGen(family, genId) || latestKeeper(family);
   const [servings, setServings] = useState(gen.servings || 4);
-  const genNumber = family.generations.findIndex((g) => g.id === gen.id) + 1;
-  const kids = childCount(family, gen.id);
 
   useEffect(() => {
     setServings(gen.servings || 4);
-  }, [gen.id]);
+  }, [gen.id, gen.servings]);
 
   const mult = servings / (gen.servings || 1);
 
@@ -813,7 +806,7 @@ export default function App() {
             a cookbook that keeps evolving
           </div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 36, fontWeight: 500, margin: 0, color: COLORS.ink }}>
-            <span>Dame and Ems' Cookbook</span>
+            <span>Dame and Ems&rsquo; Cookbook</span>
             <img
               src={COVER_LOGO}
               alt="Dame and Em, cooking up memories"
