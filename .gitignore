@@ -5,3 +5,6 @@ dist-ssr
 .vercel
 .DS_Store
 .env*
+.agents
+.claude
+skills-lock.json

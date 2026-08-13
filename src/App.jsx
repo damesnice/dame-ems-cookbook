@@ -50,25 +50,42 @@ function latestKeeper(family) {
 }
 
 // ---------- persistence ----------
+// The shelf is shared: recipes live in a server-side store (via /api/families) so
+// everyone who opens the app sees the same collection. localStorage is kept only
+// as an offline cache — a fast first paint and a fallback when the network is down.
 
 const STORAGE_KEY = "dame-ems-cookbook:families";
 
-function loadFamilies() {
+function loadCachedFamilies() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
-function saveFamilies(families) {
+function cacheFamilies(families) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(families));
-    return true;
   } catch {
-    return false;
+    // best-effort cache; ignore quota/availability errors
   }
+}
+
+async function fetchFamilies() {
+  const res = await fetch("/api/families");
+  if (!res.ok) throw new Error("Failed to load recipes");
+  return res.json();
+}
+
+async function pushFamilies(families) {
+  const res = await fetch("/api/families", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(families),
+  });
+  if (!res.ok) throw new Error("Failed to save recipes");
 }
 
 // ---------- shared UI bits ----------
@@ -727,17 +744,69 @@ function FamilyTree({ family, onSelect, onBack }) {
 export default function App() {
   const [families, setFamilies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncError, setSyncError] = useState(false);
   const [view, setView] = useState({ screen: "shelf" });
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    setFamilies(loadFamilies());
-    setLoading(false);
+    let cancelled = false;
+
+    async function refresh() {
+      try {
+        const server = await fetchFamilies();
+        if (cancelled) return;
+        setFamilies(server);
+        cacheFamilies(server);
+        setSyncError(false);
+      } catch {
+        if (!cancelled) setSyncError(true);
+      }
+    }
+
+    async function init() {
+      const cached = loadCachedFamilies();
+      if (cached) setFamilies(cached);
+      try {
+        const server = await fetchFamilies();
+        if (cancelled) return;
+        if (server.length === 0 && cached && cached.length > 0) {
+          // first load after the shelf became shared: carry this device's
+          // existing recipes up to the server instead of losing them
+          await pushFamilies(cached);
+          if (!cancelled) setFamilies(cached);
+        } else {
+          setFamilies(server);
+          cacheFamilies(server);
+        }
+        setSyncError(false);
+      } catch {
+        if (!cancelled) setSyncError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    init();
+
+    function onVisible() {
+      if (document.visibilityState === "visible") refresh();
+    }
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   function persist(next) {
     setFamilies(next);
-    saveFamilies(next);
+    cacheFamilies(next);
+    pushFamilies(next)
+      .then(() => setSyncError(false))
+      .catch(() => setSyncError(true));
   }
 
   function exportBackup() {
@@ -835,6 +904,12 @@ export default function App() {
             />
           </h1>
         </div>
+
+        {syncError && (
+          <div style={{ background: COLORS.mustard, color: COLORS.ink, fontFamily: "'Inter', sans-serif", fontSize: 12.5, fontWeight: 500, padding: "8px 14px", borderRadius: 4, marginBottom: 20 }}>
+            Couldn&rsquo;t reach the shared cookbook — showing your last saved copy. Changes will sync once you&rsquo;re back online.
+          </div>
+        )}
 
         <div style={{ display: "flex", borderBottom: `1px solid ${COLORS.line}`, marginBottom: 28 }}>
           <Tab label="The shelf" active={view.screen === "shelf" || view.screen === "recipe" || view.screen === "tree"} onClick={() => setView({ screen: "shelf" })} />
