@@ -17,7 +17,7 @@ const FONTS_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Frau
 
 const COVER_LOGO = "/cover.png";
 
-const CATEGORIES = ["Main", "Side", "Baking", "Sauce & ferment", "Breakfast", "Dessert", "Other"];
+const CATEGORIES = ["Main", "Dinner", "Side", "Baking", "Sauce & ferment", "Breakfast", "Dessert", "Other"];
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -192,8 +192,9 @@ function JarBadge({ isKeeper }) {
 
 // ---------- Shelf ----------
 
-function Shelf({ families, onOpen, onNew }) {
+function Shelf({ families, onOpen, onNew, onRecategorize }) {
   const [filter, setFilter] = useState("All");
+  const [dragOverCategory, setDragOverCategory] = useState(null);
   const shown = filter === "All" ? families : families.filter((f) => f.category === filter);
 
   if (families.length === 0) {
@@ -217,14 +218,27 @@ function Shelf({ families, onOpen, onNew }) {
           <button
             key={c}
             onClick={() => setFilter(c)}
+            onDragOver={(e) => {
+              if (c === "All") return;
+              e.preventDefault();
+              setDragOverCategory(c);
+            }}
+            onDragLeave={() => setDragOverCategory((cur) => (cur === c ? null : cur))}
+            onDrop={(e) => {
+              if (c === "All") return;
+              e.preventDefault();
+              const familyId = e.dataTransfer.getData("text/plain");
+              if (familyId) onRecategorize(familyId, c);
+              setDragOverCategory(null);
+            }}
             style={{
               fontFamily: "'Inter', sans-serif",
               fontSize: 12,
               fontWeight: 500,
               padding: "6px 12px",
               borderRadius: 20,
-              border: `1px solid ${filter === c ? COLORS.plum : COLORS.line}`,
-              background: filter === c ? COLORS.plum : "transparent",
+              border: `1px solid ${filter === c || dragOverCategory === c ? COLORS.plum : COLORS.line}`,
+              background: filter === c ? COLORS.plum : dragOverCategory === c ? COLORS.line : "transparent",
               color: filter === c ? "#F7F1EA" : COLORS.inkSoft,
               cursor: "pointer",
             }}
@@ -252,6 +266,8 @@ function Shelf({ families, onOpen, onNew }) {
               <div
                 key={f.id}
                 onClick={() => onOpen(f.id, gen.id)}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("text/plain", f.id)}
                 style={{
                   background: COLORS.card,
                   border: `1px solid ${COLORS.line}`,
@@ -778,6 +794,11 @@ export default function App() {
     persist(next);
   }
 
+  function handleRecategorize(familyId, category) {
+    const next = families.map((f) => (f.id === familyId ? { ...f, category } : f));
+    persist(next);
+  }
+
   function resetAll() {
     persist([]);
     setView({ screen: "shelf" });
@@ -826,6 +847,7 @@ export default function App() {
               families={families}
               onOpen={(familyId, genId) => setView({ screen: "recipe", familyId, genId })}
               onNew={() => setView({ screen: "new" })}
+              onRecategorize={handleRecategorize}
             />
           )}
 
