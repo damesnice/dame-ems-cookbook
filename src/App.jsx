@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 const COLORS = {
   paper: "#EFE9D8",
@@ -86,6 +86,30 @@ async function pushFamilies(families) {
     body: JSON.stringify(families),
   });
   if (!res.ok) throw new Error("Failed to save recipes");
+}
+
+// ---------- auth ----------
+
+async function checkSession() {
+  const res = await fetch("/api/login");
+  if (!res.ok) return false;
+  const data = await res.json();
+  return !!data.authed;
+}
+
+async function login(username, password) {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Couldn't log in");
+  return true;
+}
+
+async function logout() {
+  await fetch("/api/login", { method: "DELETE" });
 }
 
 // ---------- shared UI bits ----------
@@ -739,6 +763,72 @@ function FamilyTree({ family, onSelect, onBack }) {
   );
 }
 
+// ---------- Login ----------
+
+function Login({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!username.trim() || !password) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await login(username.trim(), password);
+      onLogin();
+    } catch (err) {
+      setError(err.message || "Couldn't log in");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", justifyContent: "center", padding: "60px 20px" }}>
+      <form onSubmit={submit} style={{ width: "100%", maxWidth: 320 }}>
+        <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, marginBottom: 4, textAlign: "center" }}>
+          Dame and Ems&rsquo; Cookbook
+        </h2>
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 22, textAlign: "center" }}>
+          Log in to see the shelf.
+        </p>
+
+        <Field label="Username">
+          <input
+            style={inputStyle}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+          />
+        </Field>
+        <Field label="Password">
+          <input
+            type="password"
+            style={inputStyle}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </Field>
+
+        {error && (
+          <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 14 }}>
+            {error}
+          </div>
+        )}
+
+        <Button type="submit" style={{ width: "100%" }}>
+          {submitting ? "Logging in…" : "Log in"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
 // ---------- App ----------
 
 export default function App() {
@@ -746,9 +836,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState(false);
   const [view, setView] = useState({ screen: "shelf" });
-  const fileInputRef = useRef(null);
+  const [authStatus, setAuthStatus] = useState("checking"); // "checking" | "out" | "in"
 
   useEffect(() => {
+    let cancelled = false;
+    checkSession()
+      .then((authed) => {
+        if (!cancelled) setAuthStatus(authed ? "in" : "out");
+      })
+      .catch(() => {
+        if (!cancelled) setAuthStatus("out");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "in") return;
     let cancelled = false;
 
     async function refresh() {
@@ -799,7 +904,7 @@ export default function App() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
+  }, [authStatus]);
 
   function persist(next) {
     setFamilies(next);
@@ -809,36 +914,12 @@ export default function App() {
       .catch(() => setSyncError(true));
   }
 
-  function exportBackup() {
-    const blob = new Blob([JSON.stringify(families, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "dame-ems-cookbook-backup.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  function importBackup(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const imported = JSON.parse(e.target.result);
-        if (!Array.isArray(imported)) throw new Error("bad format");
-        const existingIds = new Set(families.map((f) => f.id));
-        const fresh = imported.filter((f) => !existingIds.has(f.id));
-        persist([...families, ...fresh]);
-        alert(`Imported ${fresh.length} recipe${fresh.length === 1 ? "" : "s"}.`);
-      } catch {
-        alert("Couldn't read that file — make sure it's a backup exported from this cookbook.");
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = "";
+  function handleLogout() {
+    logout().finally(() => {
+      setFamilies([]);
+      setView({ screen: "shelf" });
+      setAuthStatus("out");
+    });
   }
 
   function handleCreate(family, genId) {
@@ -868,9 +949,24 @@ export default function App() {
     persist(next);
   }
 
-  function resetAll() {
-    persist([]);
-    setView({ screen: "shelf" });
+  if (authStatus === "checking") {
+    return (
+      <div style={{ padding: 60, textAlign: "center", fontFamily: "'Fraunces', serif", fontStyle: "italic", color: COLORS.inkSoft }}>
+        Opening the pantry…
+      </div>
+    );
+  }
+
+  if (authStatus === "out") {
+    return (
+      <div style={{ background: COLORS.paper, minHeight: "100vh", color: COLORS.ink }}>
+        <style>{FONTS_IMPORT}{`
+          * { box-sizing: border-box; }
+          input:focus { outline: 2px solid ${COLORS.plum}; outline-offset: 1px; }
+        `}</style>
+        <Login onLogin={() => setAuthStatus("in")} />
+      </div>
+    );
   }
 
   if (loading) {
@@ -961,20 +1057,9 @@ export default function App() {
         </div>
 
         <div style={{ borderTop: `1px solid ${COLORS.line}`, padding: "16px 0 40px", display: "flex", justifyContent: "flex-end", gap: 18, flexWrap: "wrap" }}>
-          <input type="file" accept="application/json" ref={fileInputRef} style={{ display: "none" }} onChange={importBackup} />
-          <button onClick={() => fileInputRef.current.click()} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline" }}>
-            restore from backup
+          <button onClick={handleLogout} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline" }}>
+            log out
           </button>
-          {families.length > 0 && (
-            <button onClick={exportBackup} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline" }}>
-              back up recipes
-            </button>
-          )}
-          {families.length > 0 && (
-            <button onClick={resetAll} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline" }}>
-              clear the shelf
-            </button>
-          )}
         </div>
       </div>
     </div>

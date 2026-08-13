@@ -35,4 +35,10 @@ export default [
       'react/prop-types': 'off',
     },
   },
+  {
+    files: ['api/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 ]
