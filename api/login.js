@@ -15,18 +15,23 @@ export default function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const expectedUser = process.env.COOKBOOK_USERNAME;
+    const expectedUsers = (process.env.COOKBOOK_USERNAME || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const expectedPass = process.env.COOKBOOK_PASSWORD;
-    if (!expectedUser || !expectedPass) {
+    if (!expectedUsers.length || !expectedPass) {
       res.status(500).json({ error: "Login isn't configured yet." });
       return;
     }
 
     const { username, password } = req.body || {};
-    const ok =
+    const usernameOk =
       typeof username === "string" &&
+      expectedUsers.some((u) => timingSafeStringEqual(username, u));
+    const ok =
+      usernameOk &&
       typeof password === "string" &&
-      timingSafeStringEqual(username, expectedUser) &&
       timingSafeStringEqual(password, expectedPass);
 
     if (!ok) {
