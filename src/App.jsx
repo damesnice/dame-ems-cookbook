@@ -979,14 +979,24 @@ function normalizeSlot(value) {
   return { items: value ? [value] : [], image: null };
 }
 
+// A slot can be "linked" — set once via the "eating this all week" checkbox
+// — meaning every day reads that slot from a single source day instead of
+// its own stored value. Resolves what a given day+slot should actually
+// show, plus whether this day is the source, a follower, or unlinked.
+function getEffectiveSlot(week, day, slot) {
+  const sourceDay = (week?.repeats || {})[slot] || null;
+  const isSource = sourceDay === day;
+  const isLinked = !!sourceDay && !isSource;
+  const readDay = isLinked ? sourceDay : day;
+  return { value: normalizeSlot(week?.days?.[readDay]?.[slot]), isSource, isLinked, sourceDay };
+}
+
 function weekFillCount(week) {
   if (!week) return 0;
   let n = 0;
   WEEK_DAYS.forEach((day) => {
-    const d = week.days?.[day];
-    if (!d) return;
     MEAL_SLOTS.forEach((slot) => {
-      if (normalizeSlot(d[slot]).items.length) n += 1;
+      if (getEffectiveSlot(week, day, slot).value.items.length) n += 1;
     });
   });
   return n;
@@ -1045,7 +1055,7 @@ function pillStyle(active) {
 // One slot (e.g. "dinner") can hold more than one thing — a main plus a
 // side or two. Items can be typed, or browsed from the shelf's recipes and
 // the pantry (so "asparagus" as a side is one tap, not a typed sentence).
-function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek }) {
+function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek, onUnrepeatWeek, isSource, isLinked, sourceDay }) {
   const [draft, setDraft] = useState("");
   const [browsing, setBrowsing] = useState(false);
   const [source, setSource] = useState("recipes");
@@ -1055,6 +1065,35 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek })
 
   const slotValue = normalizeSlot(value);
   const hasItem = (name) => slotValue.items.some((it) => it.toLowerCase() === name.toLowerCase());
+
+  // Following another day's "eat this all week" link — read-only mirror,
+  // no controls. Editing/unlinking happens on the day that started it.
+  if (isLinked) {
+    return (
+      <div style={{ padding: "10px 0", opacity: 0.45 }}>
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 6 }}>
+          {slot}
+        </div>
+        {slotValue.items.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 4 }}>
+            {slotValue.items.map((item) => (
+              <span
+                key={item}
+                style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: COLORS.paper, color: COLORS.inkSoft }}
+              >
+                {item}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>—</span>
+        )}
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10.5, color: COLORS.inkSoft, fontStyle: "italic" }}>
+          same as {sourceDay} all week
+        </div>
+      </div>
+    );
+  }
 
   function addItem(name) {
     const clean = name.trim();
@@ -1191,11 +1230,10 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek })
         <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, fontFamily: "'Inter', sans-serif", fontSize: 11, color: COLORS.inkSoft, cursor: "pointer" }}>
           <input
             type="checkbox"
-            onChange={(e) => {
-              if (e.target.checked) onRepeatWeek();
-            }}
+            checked={isSource}
+            onChange={(e) => (e.target.checked ? onRepeatWeek() : onUnrepeatWeek())}
           />
-          Eating this every day this week — fill the rest
+          Eating this every day this week
         </label>
       )}
 
@@ -1229,32 +1267,38 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek })
   );
 }
 
-function DayCard({ day, value, pantry, families, onChange, onRepeatWeek }) {
-  const day5 = value || emptyDay();
+function DayCard({ day, week, pantry, families, onChange, onRepeatWeek, onUnrepeatWeek }) {
   return (
     <div style={{ background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4, padding: "14px 16px" }}>
       <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 4 }}>
         {day}
       </div>
       <div>
-        {MEAL_SLOTS.map((slot, idx) => (
-          <div key={slot} style={{ borderTop: idx === 0 ? "none" : `1px solid ${COLORS.line}` }}>
-            <MealItemSlot
-              slot={slot}
-              value={day5[slot]}
-              pantry={pantry}
-              families={families}
-              onChange={onChange}
-              onRepeatWeek={() => onRepeatWeek(slot)}
-            />
-          </div>
-        ))}
+        {MEAL_SLOTS.map((slot, idx) => {
+          const { value, isSource, isLinked, sourceDay } = getEffectiveSlot(week, day, slot);
+          return (
+            <div key={slot} style={{ borderTop: idx === 0 ? "none" : `1px solid ${COLORS.line}` }}>
+              <MealItemSlot
+                slot={slot}
+                value={value}
+                pantry={pantry}
+                families={families}
+                onChange={onChange}
+                onRepeatWeek={() => onRepeatWeek(slot)}
+                onUnrepeatWeek={() => onUnrepeatWeek(slot)}
+                isSource={isSource}
+                isLinked={isLinked}
+                sourceDay={sourceDay}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlotWeek, onShuffle, shuffleLoading, shuffleError }) {
+function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError }) {
   return (
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
@@ -1273,11 +1317,12 @@ function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlot
           <DayCard
             key={day}
             day={day}
-            value={week?.days?.[day]}
+            week={week}
             pantry={pantry}
             families={families}
             onChange={(slot, patch) => onUpdateSlot(weekNum, day, slot, patch)}
             onRepeatWeek={(slot) => onRepeatSlotWeek(weekNum, day, slot)}
+            onUnrepeatWeek={(slot) => onUnrepeatSlotWeek(weekNum, slot)}
           />
         ))}
       </div>
@@ -1285,7 +1330,7 @@ function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlot
   );
 }
 
-function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onShuffleWeek }) {
+function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffleWeek }) {
   const [expanded, setExpanded] = useState(null);
   const [shuffleLoadingWeek, setShuffleLoadingWeek] = useState(null);
   const [shuffleError, setShuffleError] = useState("");
@@ -1360,6 +1405,7 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
                   families={families}
                   onUpdateSlot={onUpdateSlot}
                   onRepeatSlotWeek={onRepeatSlotWeek}
+                  onUnrepeatSlotWeek={onUnrepeatSlotWeek}
                   onShuffle={() => handleShuffle(weekNum)}
                   shuffleLoading={shuffleLoadingWeek === weekNum}
                   shuffleError={expanded === weekNum ? shuffleError : ""}
@@ -1719,31 +1765,40 @@ export default function App() {
     persistMealPlan({ ...mealPlan, weeks });
   }
 
-  // Copies one day's slot (e.g. Monday's dinner) onto that same slot for
-  // every day in the week — "eating this all week" in one click.
+  // "Eating this all week": links a slot (e.g. dinner) to one source day
+  // for the whole week. Every other day just reads the source day's value
+  // (see getEffectiveSlot) rather than getting a one-time copy — so
+  // unchecking cleanly reverts every other day, and editing the source day
+  // later keeps every linked day in sync automatically.
   function handleRepeatSlotWeek(weekNum, sourceDay, slot) {
     const weeks = { ...mealPlan.weeks };
-    const week = weeks[weekNum] || { days: {} };
-    const days = { ...week.days };
-    const sourceValue = normalizeSlot(days[sourceDay]?.[slot]);
-    WEEK_DAYS.forEach((day) => {
-      const dayObj = { ...emptyDay(), ...days[day] };
-      dayObj[slot] = { items: [...sourceValue.items], image: sourceValue.image };
-      days[day] = dayObj;
-    });
-    weeks[weekNum] = { ...week, days };
+    const week = weeks[weekNum] || { days: {}, repeats: {} };
+    const repeats = { ...(week.repeats || {}), [slot]: sourceDay };
+    weeks[weekNum] = { ...week, repeats };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
+  function handleUnrepeatSlotWeek(weekNum, slot) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {}, repeats: {} };
+    const repeats = { ...(week.repeats || {}) };
+    delete repeats[slot];
+    weeks[weekNum] = { ...week, repeats };
     persistMealPlan({ ...mealPlan, weeks });
   }
 
   async function handleShuffleWeek(weekNum, recipes) {
     const suggestion = await suggestWeek(recipes);
     const weeks = { ...mealPlan.weeks };
-    const week = weeks[weekNum] || { days: {} };
+    const week = weeks[weekNum] || { days: {}, repeats: {} };
     const days = { ...week.days };
+    const repeats = week.repeats || {};
     WEEK_DAYS.forEach((day) => {
       const dayObj = { ...emptyDay(), ...days[day] };
       const suggested = suggestion.days?.[day] || {};
       MEAL_SLOTS.forEach((slot) => {
+        const sourceDay = repeats[slot];
+        if (sourceDay && sourceDay !== day) return; // follows another day — don't fill separately
         const current = normalizeSlot(dayObj[slot]);
         dayObj[slot] = current.items.length === 0 && suggested[slot] ? { ...current, items: [suggested[slot]] } : current;
       });
@@ -1870,6 +1925,7 @@ export default function App() {
               pantry={pantry}
               onUpdateSlot={handleUpdateMealSlot}
               onRepeatSlotWeek={handleRepeatSlotWeek}
+              onUnrepeatSlotWeek={handleUnrepeatSlotWeek}
               onShuffleWeek={handleShuffleWeek}
             />
           )}

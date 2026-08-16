@@ -360,3 +360,78 @@ fire-once action, not a synced state.
 add a meal to Monday's breakfast, check "eating this every day this week",
 confirm all 7 days now show that same breakfast; confirm Monday's lunch
 was untouched.
+
+## 2026-08-16 — Fix: unchecking "eat this all week" didn't undo it; grey out linked days
+
+**What:** Reworked the "eating this all week" feature from a one-time copy
+into an actual link, and greyed out the days that are following it.
+
+**Why:** Two bugs/asks from Damon on the copy-based version: (1) unchecking
+the box did nothing — the other days stayed filled, because checking it had
+copied the data into each day independently, so there was nothing left
+that remembered they were ever connected; (2) he wanted the linked days
+visibly greyed out, not just filled in looking like normal independent
+entries.
+
+**The real fix was changing what "checked" means, not patching the
+checkbox.** A copy is a one-way, forgettable operation — once Tuesday has
+its own copy of Monday's dinner, there's no way to tell "this is a link"
+from "I happened to type the same thing." So the whole approach changed:
+checking the box no longer copies data into every day. It sets a pointer —
+`week.repeats.dinner = "Monday"` — and every day's dinner is *read* through
+that pointer instead of from its own stored value:
+
+```js
+// src/App.jsx
+function getEffectiveSlot(week, day, slot) {
+  const sourceDay = (week?.repeats || {})[slot] || null;
+  const isSource = sourceDay === day;
+  const isLinked = !!sourceDay && !isSource;
+  const readDay = isLinked ? sourceDay : day;
+  return { value: normalizeSlot(week?.days?.[readDay]?.[slot]), isSource, isLinked, sourceDay };
+}
+```
+
+This one change gets both asks for free: unchecking just deletes the
+pointer (`delete repeats[slot]`), and every other day's dinner instantly
+reverts to whatever it actually has stored — which for a freshly-linked
+week is nothing, so it goes back to empty, exactly the "unselect" Damon
+wanted. And because followers never had their own copy in the first place,
+`MealItemSlot` can render them as a plain read-only, 45%-opacity view — no
+chips to remove, no add field, no browse button, just the mirrored items
+and a small "same as Monday all week" note:
+
+```js
+// src/App.jsx — MealItemSlot, early return when isLinked
+if (isLinked) {
+  return (
+    <div style={{ padding: "10px 0", opacity: 0.45 }}>
+      {/* read-only chips, no controls */}
+      <div style={{ fontStyle: "italic", ... }}>same as {sourceDay} all week</div>
+    </div>
+  );
+}
+```
+
+The checkbox itself became a controlled input (`checked={isSource}`)
+instead of the old fire-and-forget uncontrolled one, so it now accurately
+reflects reality instead of just whatever the browser remembered you last
+clicked.
+
+**Two side effects worth knowing about, both intentional:**
+- Editing the source day after linking now updates every follower day live
+  (since they all read through the same pointer) — this wasn't possible
+  with the old copy approach and is arguably a better feature, not just a
+  fix.
+- `weekFillCount` (the "X/28 planned" counter) and `handleShuffleWeek` (the
+  shuffle button) both had to become repeat-aware — fill counting now reads
+  through the same `getEffectiveSlot` so followers count as filled, and
+  shuffle explicitly skips follower days rather than wastefully filling
+  data that would stay hidden behind the link.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+link Monday's dinner across the week, confirm Tuesday–Sunday show it
+greyed out with "same as Monday all week"; uncheck Monday's box and
+confirm every other day goes back to empty (or whatever it had before, if
+anything); edit Monday's dinner while still linked and confirm the other
+days update without re-checking anything.
