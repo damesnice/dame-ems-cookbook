@@ -88,6 +88,40 @@ async function pushFamilies(families) {
   if (!res.ok) throw new Error("Failed to save recipes");
 }
 
+const MEALPLAN_STORAGE_KEY = "dame-ems-cookbook:mealplan";
+
+function loadCachedMealPlan() {
+  try {
+    const raw = localStorage.getItem(MEALPLAN_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheMealPlan(mealPlan) {
+  try {
+    localStorage.setItem(MEALPLAN_STORAGE_KEY, JSON.stringify(mealPlan));
+  } catch {
+    // best-effort cache; ignore quota/availability errors
+  }
+}
+
+async function fetchMealPlan() {
+  const res = await fetch("/api/mealplan");
+  if (!res.ok) throw new Error("Failed to load meal plan");
+  return res.json();
+}
+
+async function pushMealPlan(mealPlan) {
+  const res = await fetch("/api/mealplan", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(mealPlan),
+  });
+  if (!res.ok) throw new Error("Failed to save meal plan");
+}
+
 // ---------- auth ----------
 
 async function checkSession() {
@@ -136,7 +170,7 @@ function Tab({ label, active, onClick }) {
   );
 }
 
-function Button({ children, onClick, variant = "primary", style, type = "button" }) {
+function Button({ children, onClick, variant = "primary", style, type = "button", disabled = false }) {
   const base = {
     fontFamily: "'Inter', sans-serif",
     fontSize: 13,
@@ -144,8 +178,9 @@ function Button({ children, onClick, variant = "primary", style, type = "button"
     letterSpacing: "0.01em",
     padding: "9px 16px",
     borderRadius: 3,
-    cursor: "pointer",
+    cursor: disabled ? "default" : "pointer",
     border: "1px solid " + COLORS.ink,
+    opacity: disabled ? 0.55 : 1,
   };
   const variants = {
     primary: { background: COLORS.plum, color: "#F7F1EA", border: `1px solid ${COLORS.plum}` },
@@ -153,7 +188,7 @@ function Button({ children, onClick, variant = "primary", style, type = "button"
     danger: { background: "transparent", color: "#8C3B2E", border: "1px solid #8C3B2E" },
   };
   return (
-    <button type={type} onClick={onClick} style={{ ...base, ...variants[variant], ...style }}>
+    <button type={type} onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant], ...style }}>
       {children}
     </button>
   );
@@ -518,60 +553,56 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 32 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-            <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft }}>Serves</span>
-            <button onClick={() => setServings((s) => Math.max(1, s - 1))} style={{ width: 24, height: 24, border: `1px solid ${COLORS.line}`, background: "transparent", cursor: "pointer", borderRadius: 3 }}>−</button>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, minWidth: 20, textAlign: "center" }}>{servings}</span>
-            <button onClick={() => setServings((s) => s + 1)} style={{ width: 24, height: 24, border: `1px solid ${COLORS.line}`, background: "transparent", cursor: "pointer", borderRadius: 3 }}>+</button>
-          </div>
-
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${COLORS.line}` }}>
-            Ingredients
-          </div>
-          {gen.ingredients.length === 0 ? (
-            <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft }}>None recorded.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {gen.ingredients.map((ing) => (
-                <li key={ing.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderBottom: `1px solid ${COLORS.line}`, fontFamily: "'Inter', sans-serif", fontSize: 13.5 }}>
-                  <span>{ing.name}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.inkSoft, whiteSpace: "nowrap" }}>
-                    {ing.amount ? `${roundAmt(ing.amount * mult)} ${ing.unit}` : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft }}>Serves</span>
+          <button onClick={() => setServings((s) => Math.max(1, s - 1))} style={{ width: 24, height: 24, border: `1px solid ${COLORS.line}`, background: "transparent", cursor: "pointer", borderRadius: 3 }}>−</button>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, minWidth: 20, textAlign: "center" }}>{servings}</span>
+          <button onClick={() => setServings((s) => s + 1)} style={{ width: 24, height: 24, border: `1px solid ${COLORS.line}`, background: "transparent", cursor: "pointer", borderRadius: 3 }}>+</button>
         </div>
 
-        <div>
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${COLORS.line}` }}>
-            Steps
-          </div>
-          {gen.steps.length === 0 ? (
-            <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft }}>None recorded.</p>
-          ) : (
-            <ol style={{ paddingLeft: 20, margin: 0 }}>
-              {gen.steps.map((s, idx) => (
-                <li key={idx} style={{ fontFamily: "'Inter', sans-serif", fontSize: 14.5, lineHeight: 1.7, color: COLORS.ink, marginBottom: 6 }}>
-                  {s}
-                </li>
-              ))}
-            </ol>
-          )}
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${COLORS.line}` }}>
+          Ingredients
+        </div>
+        {gen.ingredients.length === 0 ? (
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft }}>None recorded.</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, maxWidth: 480 }}>
+            {gen.ingredients.map((ing) => (
+              <li key={ing.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderBottom: `1px solid ${COLORS.line}`, fontFamily: "'Inter', sans-serif", fontSize: 13.5 }}>
+                <span>{ing.name}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.inkSoft, whiteSpace: "nowrap" }}>
+                  {ing.amount ? `${roundAmt(ing.amount * mult)} ${ing.unit}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
 
-          {gen.notes && (
-            <div style={{ marginTop: 18, padding: "12px 14px", background: COLORS.card, borderLeft: `3px solid ${COLORS.mustard}`, borderRadius: "0 3px 3px 0" }}>
-              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>Notes from this batch</div>
-              <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 14, color: COLORS.ink }}>{gen.notes}</div>
-            </div>
-          )}
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginTop: 28, marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${COLORS.line}` }}>
+          Steps
+        </div>
+        {gen.steps.length === 0 ? (
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft }}>None recorded.</p>
+        ) : (
+          <ol style={{ paddingLeft: 20, margin: 0, maxWidth: 640 }}>
+            {gen.steps.map((s, idx) => (
+              <li key={idx} style={{ fontFamily: "'Inter', sans-serif", fontSize: 14.5, lineHeight: 1.7, color: COLORS.ink, marginBottom: 6 }}>
+                {s}
+              </li>
+            ))}
+          </ol>
+        )}
 
-          <div style={{ marginTop: 24, display: "flex", gap: 10 }}>
-            <Button onClick={() => onLogCook(family.id, gen.id)}>Log a cook from here</Button>
+        {gen.notes && (
+          <div style={{ marginTop: 18, padding: "12px 14px", background: COLORS.card, borderLeft: `3px solid ${COLORS.mustard}`, borderRadius: "0 3px 3px 0", maxWidth: 640 }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>Notes from this batch</div>
+            <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 14, color: COLORS.ink }}>{gen.notes}</div>
           </div>
+        )}
+
+        <div style={{ marginTop: 24, display: "flex", gap: 10 }}>
+          <Button onClick={() => onLogCook(family.id, gen.id)}>Log a cook from here</Button>
         </div>
       </div>
     </div>
@@ -763,6 +794,176 @@ function FamilyTree({ family, onSelect, onBack }) {
   );
 }
 
+// ---------- Meal plan ----------
+
+const MEAL_SLOTS = ["breakfast", "lunch", "dinner", "snacks"];
+const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function emptyDay() {
+  return { breakfast: "", lunch: "", dinner: "", snacks: "" };
+}
+
+function weekFillCount(week) {
+  if (!week) return 0;
+  let n = 0;
+  WEEK_DAYS.forEach((day) => {
+    const d = week.days?.[day];
+    if (!d) return;
+    MEAL_SLOTS.forEach((slot) => {
+      if (d[slot] && d[slot].trim()) n += 1;
+    });
+  });
+  return n;
+}
+
+async function suggestWeek(weekLabel, recipeNames) {
+  const res = await fetch("/api/suggest-week", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ weekLabel, recipeNames }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Couldn't get AI suggestions");
+  return data;
+}
+
+function DayCard({ day, value, onChange }) {
+  const day5 = value || emptyDay();
+  return (
+    <div style={{ background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4, padding: "14px 16px" }}>
+      <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 10 }}>
+        {day}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {MEAL_SLOTS.map((slot) => (
+          <label key={slot} style={{ display: "block" }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>
+              {slot}
+            </div>
+            <input
+              style={{ ...inputStyle, fontSize: 13, padding: "7px 8px" }}
+              list="cookbook-recipe-names"
+              value={day5[slot] || ""}
+              onChange={(e) => onChange(slot, e.target.value)}
+              placeholder="—"
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WeekPanel({ weekNum, week, onUpdateSlot, onAiSuggest, aiLoading, aiError }) {
+  return (
+    <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: 0 }}>
+          Breakfast, lunch, dinner, and snacks for each day. Start typing to pull a recipe from the shelf, or write anything.
+        </p>
+        <Button variant="ghost" onClick={onAiSuggest} disabled={aiLoading}>
+          {aiLoading ? "Thinking…" : "✨ AI-fill this week"}
+        </Button>
+      </div>
+      {aiError && (
+        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{aiError}</div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+        {WEEK_DAYS.map((day) => (
+          <DayCard
+            key={day}
+            day={day}
+            value={week?.days?.[day]}
+            onChange={(slot, val) => onUpdateSlot(weekNum, day, slot, val)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MealPlan({ mealPlan, families, onUpdateSlot, onAiSuggestWeek }) {
+  const [expanded, setExpanded] = useState(null);
+  const [aiLoadingWeek, setAiLoadingWeek] = useState(null);
+  const [aiError, setAiError] = useState("");
+  const recipeNames = families.map((f) => f.name);
+
+  async function handleAiSuggest(weekNum) {
+    setAiError("");
+    setAiLoadingWeek(weekNum);
+    try {
+      await onAiSuggestWeek(weekNum, recipeNames);
+    } catch (err) {
+      setAiError(err.message || "Couldn't get AI suggestions");
+    } finally {
+      setAiLoadingWeek(null);
+    }
+  }
+
+  return (
+    <div>
+      <datalist id="cookbook-recipe-names">
+        {recipeNames.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+
+      <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, marginBottom: 4 }}>52-week meal plan</h2>
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 20 }}>
+        Click a week to open it up and plan day by day.
+      </p>
+
+      <div style={{ border: `1px solid ${COLORS.line}`, borderRadius: 6, overflow: "hidden" }}>
+        {Array.from({ length: 52 }, (_, i) => i + 1).map((weekNum) => {
+          const week = mealPlan.weeks?.[weekNum];
+          const isOpen = expanded === weekNum;
+          const filled = weekFillCount(week);
+          return (
+            <div key={weekNum} style={{ borderTop: weekNum === 1 ? "none" : `1px solid ${COLORS.line}` }}>
+              <button
+                onClick={() => setExpanded(isOpen ? null : weekNum)}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "12px 18px",
+                  background: isOpen ? COLORS.card : "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink }}>
+                  Week {weekNum}
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {filled > 0 && (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft }}>
+                      {filled}/{WEEK_DAYS.length * MEAL_SLOTS.length} planned
+                    </span>
+                  )}
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft }}>{isOpen ? "▾" : "▸"}</span>
+                </span>
+              </button>
+              {isOpen && (
+                <WeekPanel
+                  weekNum={weekNum}
+                  week={week}
+                  onUpdateSlot={onUpdateSlot}
+                  onAiSuggest={() => handleAiSuggest(weekNum)}
+                  aiLoading={aiLoadingWeek === weekNum}
+                  aiError={expanded === weekNum ? aiError : ""}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---------- Login ----------
 
 function Login({ onLogin }) {
@@ -833,6 +1034,7 @@ function Login({ onLogin }) {
 
 export default function App() {
   const [families, setFamilies] = useState([]);
+  const [mealPlan, setMealPlan] = useState({ weeks: {} });
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState(false);
   const [view, setView] = useState({ screen: "shelf" });
@@ -858,10 +1060,12 @@ export default function App() {
 
     async function refresh() {
       try {
-        const server = await fetchFamilies();
+        const [server, serverPlan] = await Promise.all([fetchFamilies(), fetchMealPlan()]);
         if (cancelled) return;
         setFamilies(server);
         cacheFamilies(server);
+        setMealPlan(serverPlan);
+        cacheMealPlan(serverPlan);
         setSyncError(false);
       } catch {
         if (!cancelled) setSyncError(true);
@@ -871,8 +1075,10 @@ export default function App() {
     async function init() {
       const cached = loadCachedFamilies();
       if (cached) setFamilies(cached);
+      const cachedPlan = loadCachedMealPlan();
+      if (cachedPlan) setMealPlan(cachedPlan);
       try {
-        const server = await fetchFamilies();
+        const [server, serverPlan] = await Promise.all([fetchFamilies(), fetchMealPlan()]);
         if (cancelled) return;
         if (server.length === 0 && cached && cached.length > 0) {
           // first load after the shelf became shared: carry this device's
@@ -883,6 +1089,8 @@ export default function App() {
           setFamilies(server);
           cacheFamilies(server);
         }
+        setMealPlan(serverPlan);
+        cacheMealPlan(serverPlan);
         setSyncError(false);
       } catch {
         if (!cancelled) setSyncError(true);
@@ -949,6 +1157,41 @@ export default function App() {
     persist(next);
   }
 
+  function persistMealPlan(next) {
+    setMealPlan(next);
+    cacheMealPlan(next);
+    pushMealPlan(next)
+      .then(() => setSyncError(false))
+      .catch(() => setSyncError(true));
+  }
+
+  function handleUpdateMealSlot(weekNum, day, slot, value) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {} };
+    const days = { ...week.days };
+    const dayValue = { ...emptyDay(), ...days[day], [slot]: value };
+    days[day] = dayValue;
+    weeks[weekNum] = { ...week, days };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
+  async function handleAiSuggestWeek(weekNum, recipeNames) {
+    const suggestion = await suggestWeek(`Week ${weekNum}`, recipeNames);
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {} };
+    const days = { ...week.days };
+    WEEK_DAYS.forEach((day) => {
+      const existing = { ...emptyDay(), ...days[day] };
+      const suggested = suggestion.days?.[day] || {};
+      MEAL_SLOTS.forEach((slot) => {
+        if (!existing[slot] && suggested[slot]) existing[slot] = suggested[slot];
+      });
+      days[day] = existing;
+    });
+    weeks[weekNum] = { ...week, days };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
   if (authStatus === "checking") {
     return (
       <div style={{ padding: 60, textAlign: "center", fontFamily: "'Fraunces', serif", fontStyle: "italic", color: COLORS.inkSoft }}>
@@ -1010,6 +1253,7 @@ export default function App() {
         <div style={{ display: "flex", borderBottom: `1px solid ${COLORS.line}`, marginBottom: 28 }}>
           <Tab label="The shelf" active={view.screen === "shelf" || view.screen === "recipe" || view.screen === "tree"} onClick={() => setView({ screen: "shelf" })} />
           <Tab label="New recipe" active={view.screen === "new"} onClick={() => setView({ screen: "new" })} />
+          <Tab label="Meal plan" active={view.screen === "mealplan"} onClick={() => setView({ screen: "mealplan" })} />
         </div>
 
         <div style={{ paddingBottom: 60 }}>
@@ -1052,6 +1296,15 @@ export default function App() {
               fromGenId={view.fromGenId}
               onSave={(newGen) => handleSaveCook(activeFamily.id, newGen)}
               onCancel={() => setView({ screen: "recipe", familyId: activeFamily.id, genId: view.fromGenId })}
+            />
+          )}
+
+          {view.screen === "mealplan" && (
+            <MealPlan
+              mealPlan={mealPlan}
+              families={families}
+              onUpdateSlot={handleUpdateMealSlot}
+              onAiSuggestWeek={handleAiSuggestWeek}
             />
           )}
         </div>
