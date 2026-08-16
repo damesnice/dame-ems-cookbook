@@ -123,3 +123,58 @@ names) so the endpoint has enough to sort by slot.
 open Meal plan → expand a week → "🔀 Shuffle in a week" → confirm all 7 days
 fill in from the shelf (or the generic fallback ideas on a fresh cookbook)
 and nothing already typed gets clobbered.
+
+## 2026-08-16 — Fix doubled step numbers; add photos to meal plan slots
+
+**What:** Two small fixes in `src/App.jsx`.
+
+**Why (doubled numbers):** Damon logged a recipe whose steps were typed
+already-numbered ("1. Heat a large skillet..."), and the `<ol>` that renders
+Steps adds its own number — so it read "1. 1. Heat a large skillet...".
+Added `stripLeadingNumber()`, a small regex (`/^\s*\d+[.)]\s*/`) applied in
+three places: both step-parsing sites (`NewCulture`, `LogCook`, so new
+entries are stored clean) and at render time in `RecipeDetail` (so recipes
+*already* saved with the doubled prefix display correctly immediately,
+without anyone re-typing them).
+
+**Why (meal plan photos):** Damon asked for two things on the meal plan —
+confirmed the free-text slot already supports typing anything (the
+`list="cookbook-recipe-names"` datalist is autocomplete, not a locked
+picker) — and added the ability to attach a photo per meal slot, so a
+shuffled or typed-in meal can carry a picture of the actual dish.
+
+Slot data changed shape from a plain string to `{ text, image }` (image is a
+resized JPEG data URL, or `null`). Rather than migrate every already-saved
+plan, added `normalizeSlot()` so any reader treats a legacy string slot and
+the new object shape the same way — old data keeps working untouched, and
+only gets upgraded to the new shape the next time that specific slot is
+edited:
+
+```js
+// src/App.jsx
+function normalizeSlot(value) {
+  if (value && typeof value === "object") {
+    return { text: value.text || "", image: value.image || null };
+  }
+  return { text: value || "", image: null };
+}
+```
+
+Photos are resized client-side before they're stored — the whole meal plan
+is one JSON blob in Redis, so an un-resized photo would bloat it fast:
+
+```js
+// src/App.jsx — resizeImageFile(file, maxDim = 480, quality = 0.72)
+// FileReader -> Image -> draw to a maxDim-capped <canvas> -> canvas.toDataURL("image/jpeg", quality)
+```
+
+New `MealSlotField` component renders the text input plus a small "📷 add
+photo" control (file input, `capture="environment"` so it opens the camera
+directly on a phone) or, once a photo's attached, a 30px thumbnail with a
+"remove photo" link.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+open an existing recipe with previously-doubled step numbers and confirm
+they now read correctly; in Meal plan, type a custom (non-shelf) meal into
+a slot, attach a photo to it from a phone camera, and confirm both persist
+after leaving and reopening that week.

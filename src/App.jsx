@@ -39,6 +39,13 @@ function roundAmt(n) {
   return Math.round(n * 100) / 100;
 }
 
+// Steps are often typed or pasted already numbered ("1. Heat a pan...");
+// the step list renders its own numbers, so strip a leading "1." / "1)"
+// to avoid showing it twice.
+function stripLeadingNumber(s) {
+  return s.replace(/^\s*\d+[.)]\s*/, "");
+}
+
 function findGen(family, genId) {
   return family.generations.find((g) => g.id === genId);
 }
@@ -445,7 +452,7 @@ function NewCulture({ onCreate, onCancel }) {
           label: "Original",
           servings: parseInt(servings, 10) || 4,
           ingredients: cleanIngredients,
-          steps: steps.split("\n").map((s) => s.trim()).filter(Boolean),
+          steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
           notes: notes.trim(),
           rating: 0,
           isKeeper: true,
@@ -588,7 +595,7 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
           <ol style={{ paddingLeft: 20, margin: 0, maxWidth: 640 }}>
             {gen.steps.map((s, idx) => (
               <li key={idx} style={{ fontFamily: "'Inter', sans-serif", fontSize: 14.5, lineHeight: 1.7, color: COLORS.ink, marginBottom: 6 }}>
-                {s}
+                {stripLeadingNumber(s)}
               </li>
             ))}
           </ol>
@@ -639,7 +646,7 @@ function LogCook({ family, fromGenId, onSave, onCancel }) {
       label: label.trim(),
       servings: parseInt(servings, 10) || 4,
       ingredients: ingredients.filter((i) => i.name.trim()).map((i) => ({ ...i, amount: parseFloat(i.amount) || 0 })),
-      steps: steps.split("\n").map((s) => s.trim()).filter(Boolean),
+      steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
       notes: notes.trim(),
       rating,
       isKeeper,
@@ -799,8 +806,22 @@ function FamilyTree({ family, onSelect, onBack }) {
 const MEAL_SLOTS = ["breakfast", "lunch", "dinner", "snacks"];
 const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+function emptySlot() {
+  return { text: "", image: null };
+}
+
 function emptyDay() {
-  return { breakfast: "", lunch: "", dinner: "", snacks: "" };
+  return { breakfast: emptySlot(), lunch: emptySlot(), dinner: emptySlot(), snacks: emptySlot() };
+}
+
+// Meal slots used to be a plain string; normalize older saved plans (and any
+// half-filled slot) into the { text, image } shape so every reader can rely
+// on it.
+function normalizeSlot(value) {
+  if (value && typeof value === "object") {
+    return { text: value.text || "", image: value.image || null };
+  }
+  return { text: value || "", image: null };
 }
 
 function weekFillCount(week) {
@@ -810,7 +831,7 @@ function weekFillCount(week) {
     const d = week.days?.[day];
     if (!d) return;
     MEAL_SLOTS.forEach((slot) => {
-      if (d[slot] && d[slot].trim()) n += 1;
+      if (normalizeSlot(d[slot]).text.trim()) n += 1;
     });
   });
   return n;
@@ -827,6 +848,90 @@ async function suggestWeek(recipes) {
   return data;
 }
 
+// Shrinks a picked photo down to a small JPEG data URL before it's stored —
+// keeps the shared meal plan (one JSON blob in Redis) from ballooning.
+function resizeImageFile(file, maxDim = 480, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that photo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Couldn't read that photo"));
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function MealSlotField({ slot, value, onChange }) {
+  const [error, setError] = useState("");
+  const slotValue = normalizeSlot(value);
+
+  async function handlePickImage(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setError("");
+    try {
+      const dataUrl = await resizeImageFile(file);
+      onChange(slot, { image: dataUrl });
+    } catch (err) {
+      setError(err.message || "Couldn't attach that photo");
+    }
+  }
+
+  return (
+    <label style={{ display: "block" }}>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>
+        {slot}
+      </div>
+      <input
+        style={{ ...inputStyle, fontSize: 13, padding: "7px 8px" }}
+        list="cookbook-recipe-names"
+        value={slotValue.text}
+        onChange={(e) => onChange(slot, { text: e.target.value })}
+        placeholder="type a meal, or pick from the shelf"
+      />
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, minHeight: 20 }}>
+        {slotValue.image ? (
+          <>
+            <img
+              src={slotValue.image}
+              alt={slotValue.text || slot}
+              style={{ width: 30, height: 30, borderRadius: 4, objectFit: "cover", border: `1px solid ${COLORS.line}` }}
+            />
+            <button
+              type="button"
+              onClick={() => onChange(slot, { image: null })}
+              style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11, fontFamily: "'Inter', sans-serif", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+            >
+              remove photo
+            </button>
+          </>
+        ) : (
+          <label style={{ fontSize: 11, fontFamily: "'Inter', sans-serif", fontWeight: 600, color: COLORS.plum, cursor: "pointer" }}>
+            📷 add photo
+            <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handlePickImage} />
+          </label>
+        )}
+      </div>
+      {error && (
+        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{error}</div>
+      )}
+    </label>
+  );
+}
+
 function DayCard({ day, value, onChange }) {
   const day5 = value || emptyDay();
   return (
@@ -834,20 +939,9 @@ function DayCard({ day, value, onChange }) {
       <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 10 }}>
         {day}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {MEAL_SLOTS.map((slot) => (
-          <label key={slot} style={{ display: "block" }}>
-            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>
-              {slot}
-            </div>
-            <input
-              style={{ ...inputStyle, fontSize: 13, padding: "7px 8px" }}
-              list="cookbook-recipe-names"
-              value={day5[slot] || ""}
-              onChange={(e) => onChange(slot, e.target.value)}
-              placeholder="—"
-            />
-          </label>
+          <MealSlotField key={slot} slot={slot} value={day5[slot]} onChange={onChange} />
         ))}
       </div>
     </div>
@@ -859,7 +953,7 @@ function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shu
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: 0 }}>
-          Breakfast, lunch, dinner, and snacks for each day. Start typing to pull a recipe from the shelf, or write anything.
+          Breakfast, lunch, dinner, and snacks for each day. Type a meal (pick from the shelf or write your own), and add a photo if you like.
         </p>
         <Button variant="ghost" onClick={onShuffle} disabled={shuffleLoading}>
           {shuffleLoading ? "Shuffling…" : "🔀 Shuffle in a week"}
@@ -874,7 +968,7 @@ function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shu
             key={day}
             day={day}
             value={week?.days?.[day]}
-            onChange={(slot, val) => onUpdateSlot(weekNum, day, slot, val)}
+            onChange={(slot, patch) => onUpdateSlot(weekNum, day, slot, patch)}
           />
         ))}
       </div>
@@ -1166,12 +1260,13 @@ export default function App() {
       .catch(() => setSyncError(true));
   }
 
-  function handleUpdateMealSlot(weekNum, day, slot, value) {
+  function handleUpdateMealSlot(weekNum, day, slot, patch) {
     const weeks = { ...mealPlan.weeks };
     const week = weeks[weekNum] || { days: {} };
     const days = { ...week.days };
-    const dayValue = { ...emptyDay(), ...days[day], [slot]: value };
-    days[day] = dayValue;
+    const dayObj = { ...emptyDay(), ...days[day] };
+    dayObj[slot] = { ...normalizeSlot(dayObj[slot]), ...patch };
+    days[day] = dayObj;
     weeks[weekNum] = { ...week, days };
     persistMealPlan({ ...mealPlan, weeks });
   }
@@ -1182,12 +1277,13 @@ export default function App() {
     const week = weeks[weekNum] || { days: {} };
     const days = { ...week.days };
     WEEK_DAYS.forEach((day) => {
-      const existing = { ...emptyDay(), ...days[day] };
+      const dayObj = { ...emptyDay(), ...days[day] };
       const suggested = suggestion.days?.[day] || {};
       MEAL_SLOTS.forEach((slot) => {
-        if (!existing[slot] && suggested[slot]) existing[slot] = suggested[slot];
+        const current = normalizeSlot(dayObj[slot]);
+        dayObj[slot] = !current.text && suggested[slot] ? { ...current, text: suggested[slot] } : current;
       });
-      days[day] = existing;
+      days[day] = dayObj;
     });
     weeks[weekNum] = { ...week, days };
     persistMealPlan({ ...mealPlan, weeks });
