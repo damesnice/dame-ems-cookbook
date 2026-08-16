@@ -307,3 +307,56 @@ open Meal plan → expand a week → on a day's Dinner slot, browse Recipes and
 add one, then browse Pantry and add "Asparagus" as a second item, confirm
 both show as separate removable chips; confirm a week planned before this
 change still shows its old single item correctly.
+
+## 2026-08-16 — "Eating this all week" checkbox on meal slots
+
+**What:** A checkbox under any filled meal slot — "Eating this every day
+this week — fill the rest" — that copies that slot's items (and photo, if
+any) onto the same slot for every other day in the week.
+
+**Why:** Damon plans some meals once and repeats them all week (e.g. the
+same breakfast Monday through Sunday) and didn't want to re-add or
+re-browse the same thing 7 times.
+
+**Scope: one slot, not the whole day.** Copies only the specific meal type
+(e.g. dinner) across the week — not breakfast/lunch/snacks too — since his
+ask was "that one meal for the whole week," and a day-wide copy would be a
+much more surprising (and harder to undo) action to trigger from a single
+checkbox.
+
+**It's a one-shot action, not a persistent link.** Checking it fires the
+copy immediately; it doesn't keep the days synced afterward, and
+unchecking doesn't undo anything. Editing Tuesday's dinner later doesn't
+touch Wednesday's — this avoided the much more complex alternative (tracking
+which days are "linked" and reacting to edits anywhere in the chain) for a
+feature whose whole point is a fast one-time fill:
+
+```js
+// src/App.jsx
+function handleRepeatSlotWeek(weekNum, sourceDay, slot) {
+  const weeks = { ...mealPlan.weeks };
+  const week = weeks[weekNum] || { days: {} };
+  const days = { ...week.days };
+  const sourceValue = normalizeSlot(days[sourceDay]?.[slot]);
+  WEEK_DAYS.forEach((day) => {
+    const dayObj = { ...emptyDay(), ...days[day] };
+    dayObj[slot] = { items: [...sourceValue.items], image: sourceValue.image };
+    days[day] = dayObj;
+  });
+  weeks[weekNum] = { ...week, days };
+  persistMealPlan({ ...mealPlan, weeks });
+}
+```
+
+It overwrites every day's slot with the source day's items — deliberately,
+since checking the box is an explicit "yes, replace whatever's there"
+action, unlike the shuffle button (which only ever fills empty slots).
+The checkbox itself only shows once a slot has at least one item (nothing
+to repeat otherwise), and only appears checked on the day you clicked —
+the days it filled don't light up their own checkboxes, since this is a
+fire-once action, not a synced state.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+add a meal to Monday's breakfast, check "eating this every day this week",
+confirm all 7 days now show that same breakfast; confirm Monday's lunch
+was untouched.
