@@ -178,3 +178,80 @@ open an existing recipe with previously-doubled step numbers and confirm
 they now read correctly; in Meal plan, type a custom (non-shelf) meal into
 a slot, attach a photo to it from a phone camera, and confirm both persist
 after leaving and reopening that week.
+
+## 2026-08-16 — Add a Pantry: quick-add ingredient chips + autocomplete
+
+**What:** New `/api/pantry` (same Redis GET/PUT pattern as families and the
+meal plan), a new **Pantry** tab, and an `IngredientPicker` wired into both
+the New recipe and Log a cook ingredient lists.
+
+**Why:** Damon didn't want to type every ingredient by hand when logging a
+recipe — he wanted to tap common ones (asparagus, low-fat cheese,
+tortillas, flour, salt, pepper, Cajun seasoning...) instead. Landed on both
+a tap-to-add picker *and* keeping the ingredient field's autocomplete, per
+his answer when asked which style he wanted.
+
+**Where the seed list came from:** Rather than hand-write a plausible-looking
+pantry, pulled a real categorized grocery list and reorganized it for a
+cookbook (dropped household/pet/baby aisles, kept food):
+[Instacart's grocery list categories](https://company.instacart.com/ideas/grocery-list-categories).
+That's `DEFAULT_PANTRY` in `api/_default-pantry.js` — 12 categories,
+~180 items. It's only a *seed*: `/api/pantry` GET returns it when nothing's
+been saved yet, but the moment the family edits anything, their version is
+what's stored from then on (mirrors how the meal plan defaults to `{weeks:
+{}}` until touched).
+
+**Data model — kept it simple, one flat picker source:**
+
+```js
+// api/pantry.js — Redis key "pantry"
+{ categories: [ { name: "Produce", items: ["Asparagus", "Onion", ...] }, ... ] }
+```
+
+**The picker combines two sources**, so tap-to-add and typeahead both work
+from the same pool — the pantry list, plus every ingredient name already
+typed into any of your own recipes (so it gets smarter over time without
+any setup):
+
+```js
+// src/App.jsx
+function combinedIngredientNames(pantry, families) {
+  const set = new Set();
+  (pantry?.categories || []).forEach((c) => c.items.forEach((it) => set.add(it)));
+  families.forEach((f) =>
+    f.generations.forEach((g) => g.ingredients.forEach((i) => i.name && set.add(i.name)))
+  );
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+```
+
+`IngredientPicker` renders category pill tabs + a chip grid (with its own
+search box that flattens across all categories while typing) above the
+ingredient rows in both `NewCulture` and `LogCook`. Tapping a chip calls
+`pickIngredient(name)`, which fills the last *empty* ingredient row instead
+of always appending — so the first tap doesn't leave a stray blank row
+above it:
+
+```js
+function pickIngredient(itemName) {
+  setIngredients((prev) => {
+    const last = prev[prev.length - 1];
+    if (last && !last.name.trim() && !last.amount && !last.unit) {
+      return prev.map((i, idx) => (idx === prev.length - 1 ? { ...i, name: itemName } : i));
+    }
+    return [...prev, { id: uid(), name: itemName, amount: "", unit: "" }];
+  });
+}
+```
+
+`PantryManager` (the Pantry tab itself) is a straightforward editable view:
+each category is a card of removable chips plus an "add an item" input, and
+there's an "add category" control at the bottom — since Damon asked for it
+to stay editable, not fixed once I seeded it.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+open New recipe → Ingredients → confirm the pantry chips show up, tap a
+few from different categories, confirm amount/unit stay editable per row;
+go to Pantry, remove an item, come back to New recipe and confirm it's
+gone from the chips; add a made-up item to Pantry and confirm it shows up
+as a chip immediately.

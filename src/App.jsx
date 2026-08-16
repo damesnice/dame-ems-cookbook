@@ -129,6 +129,40 @@ async function pushMealPlan(mealPlan) {
   if (!res.ok) throw new Error("Failed to save meal plan");
 }
 
+const PANTRY_STORAGE_KEY = "dame-ems-cookbook:pantry";
+
+function loadCachedPantry() {
+  try {
+    const raw = localStorage.getItem(PANTRY_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function cachePantry(pantry) {
+  try {
+    localStorage.setItem(PANTRY_STORAGE_KEY, JSON.stringify(pantry));
+  } catch {
+    // best-effort cache; ignore quota/availability errors
+  }
+}
+
+async function fetchPantry() {
+  const res = await fetch("/api/pantry");
+  if (!res.ok) throw new Error("Failed to load pantry");
+  return res.json();
+}
+
+async function pushPantry(pantry) {
+  const res = await fetch("/api/pantry", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(pantry),
+  });
+  if (!res.ok) throw new Error("Failed to save pantry");
+}
+
 // ---------- auth ----------
 
 async function checkSession() {
@@ -414,9 +448,99 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
   );
 }
 
+// ---------- Ingredient picker (shared by New recipe + Log a cook) ----------
+
+function combinedIngredientNames(pantry, families) {
+  const set = new Set();
+  (pantry?.categories || []).forEach((c) => c.items.forEach((it) => set.add(it)));
+  families.forEach((f) =>
+    f.generations.forEach((g) => g.ingredients.forEach((i) => i.name && set.add(i.name)))
+  );
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function IngredientPicker({ pantry, onPick }) {
+  const categories = pantry?.categories || [];
+  const [activeCat, setActiveCat] = useState(categories[0]?.name || null);
+  const [search, setSearch] = useState("");
+
+  if (categories.length === 0) return null;
+
+  const searching = search.trim().length > 0;
+  const q = search.trim().toLowerCase();
+  const visibleItems = searching
+    ? categories.flatMap((c) => c.items.filter((it) => it.toLowerCase().includes(q)))
+    : categories.find((c) => c.name === activeCat)?.items || [];
+
+  return (
+    <div style={{ marginBottom: 10, padding: "10px 12px", background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft }}>
+          Quick add from pantry
+        </span>
+        <input
+          style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }}
+          placeholder="search pantry…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      {!searching && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {categories.map((c) => (
+            <button
+              key={c.name}
+              type="button"
+              onClick={() => setActiveCat(c.name)}
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 11,
+                fontWeight: 500,
+                padding: "4px 10px",
+                borderRadius: 20,
+                border: `1px solid ${activeCat === c.name ? COLORS.plum : COLORS.line}`,
+                background: activeCat === c.name ? COLORS.plum : "transparent",
+                color: activeCat === c.name ? "#F7F1EA" : COLORS.inkSoft,
+                cursor: "pointer",
+              }}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {visibleItems.length === 0 ? (
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>No matches.</span>
+        ) : (
+          visibleItems.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onPick(item)}
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 12,
+                padding: "5px 10px",
+                borderRadius: 4,
+                border: `1px solid ${COLORS.line}`,
+                background: "#FFFDF8",
+                color: COLORS.ink,
+                cursor: "pointer",
+              }}
+            >
+              + {item}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------- New culture (create family + generation 0) ----------
 
-function NewCulture({ onCreate, onCancel }) {
+function NewCulture({ onCreate, onCancel, pantry, families }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [servings, setServings] = useState(4);
@@ -432,6 +556,15 @@ function NewCulture({ onCreate, onCancel }) {
   }
   function removeIng(id) {
     setIngredients((prev) => prev.filter((i) => i.id !== id));
+  }
+  function pickIngredient(itemName) {
+    setIngredients((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && !last.name.trim() && !last.amount && !last.unit) {
+        return prev.map((i, idx) => (idx === prev.length - 1 ? { ...i, name: itemName } : i));
+      }
+      return [...prev, { id: uid(), name: itemName, amount: "", unit: "" }];
+    });
   }
 
   function submit() {
@@ -488,9 +621,15 @@ function NewCulture({ onCreate, onCancel }) {
       </div>
 
       <Field label="Ingredients">
+        <IngredientPicker pantry={pantry} onPick={pickIngredient} />
+        <datalist id="pantry-ingredient-names">
+          {combinedIngredientNames(pantry, families).map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
         {ingredients.map((ing) => (
           <div key={ing.id} style={{ display: "grid", gridTemplateColumns: "1fr 70px 70px 28px", gap: 6, marginBottom: 6 }}>
-            <input style={inputStyle} placeholder="onion, diced" value={ing.name} onChange={(e) => updateIng(ing.id, "name", e.target.value)} />
+            <input style={inputStyle} list="pantry-ingredient-names" placeholder="onion, diced" value={ing.name} onChange={(e) => updateIng(ing.id, "name", e.target.value)} />
             <input style={inputStyle} placeholder="1" value={ing.amount} onChange={(e) => updateIng(ing.id, "amount", e.target.value)} />
             <input style={inputStyle} placeholder="cup" value={ing.unit} onChange={(e) => updateIng(ing.id, "unit", e.target.value)} />
             <button onClick={() => removeIng(ing.id)} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 16 }}>×</button>
@@ -618,7 +757,7 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
 
 // ---------- Log a cook ----------
 
-function LogCook({ family, fromGenId, onSave, onCancel }) {
+function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
   const base = findGen(family, fromGenId) || family.generations[0];
   const [label, setLabel] = useState("");
   const [ingredients, setIngredients] = useState(base.ingredients.map((i) => ({ ...i, id: uid() })));
@@ -636,6 +775,15 @@ function LogCook({ family, fromGenId, onSave, onCancel }) {
   }
   function removeIng(id) {
     setIngredients((prev) => prev.filter((i) => i.id !== id));
+  }
+  function pickIngredient(itemName) {
+    setIngredients((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && !last.name.trim() && !last.amount && !last.unit) {
+        return prev.map((i, idx) => (idx === prev.length - 1 ? { ...i, name: itemName } : i));
+      }
+      return [...prev, { id: uid(), name: itemName, amount: "", unit: "" }];
+    });
   }
 
   function submit() {
@@ -676,9 +824,15 @@ function LogCook({ family, fromGenId, onSave, onCancel }) {
       </div>
 
       <Field label="Ingredients">
+        <IngredientPicker pantry={pantry} onPick={pickIngredient} />
+        <datalist id="pantry-ingredient-names">
+          {combinedIngredientNames(pantry, families).map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
         {ingredients.map((ing) => (
           <div key={ing.id} style={{ display: "grid", gridTemplateColumns: "1fr 70px 70px 28px", gap: 6, marginBottom: 6 }}>
-            <input style={inputStyle} value={ing.name} onChange={(e) => updateIng(ing.id, "name", e.target.value)} />
+            <input style={inputStyle} list="pantry-ingredient-names" value={ing.name} onChange={(e) => updateIng(ing.id, "name", e.target.value)} />
             <input style={inputStyle} value={ing.amount} onChange={(e) => updateIng(ing.id, "amount", e.target.value)} />
             <input style={inputStyle} value={ing.unit} onChange={(e) => updateIng(ing.id, "unit", e.target.value)} />
             <button onClick={() => removeIng(ing.id)} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 16 }}>×</button>
@@ -1059,6 +1213,125 @@ function MealPlan({ mealPlan, families, onUpdateSlot, onShuffleWeek }) {
   );
 }
 
+// ---------- Pantry ----------
+
+function PantryManager({ pantry, onUpdatePantry }) {
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newItemDrafts, setNewItemDrafts] = useState({});
+
+  function addItem(categoryName) {
+    const val = (newItemDrafts[categoryName] || "").trim();
+    if (!val) return;
+    onUpdatePantry({
+      ...pantry,
+      categories: pantry.categories.map((c) =>
+        c.name === categoryName && !c.items.some((it) => it.toLowerCase() === val.toLowerCase())
+          ? { ...c, items: [...c.items, val] }
+          : c
+      ),
+    });
+    setNewItemDrafts((prev) => ({ ...prev, [categoryName]: "" }));
+  }
+
+  function removeItem(categoryName, item) {
+    onUpdatePantry({
+      ...pantry,
+      categories: pantry.categories.map((c) =>
+        c.name === categoryName ? { ...c, items: c.items.filter((it) => it !== item) } : c
+      ),
+    });
+  }
+
+  function addCategory() {
+    const val = newCategoryName.trim();
+    if (!val || pantry.categories.some((c) => c.name.toLowerCase() === val.toLowerCase())) return;
+    onUpdatePantry({ ...pantry, categories: [...pantry.categories, { name: val, items: [] }] });
+    setNewCategoryName("");
+  }
+
+  function removeCategory(categoryName) {
+    onUpdatePantry({ ...pantry, categories: pantry.categories.filter((c) => c.name !== categoryName) });
+  }
+
+  return (
+    <div>
+      <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, marginBottom: 4 }}>Pantry</h2>
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 20 }}>
+        What shows up as quick-add chips when you&rsquo;re logging ingredients. Add anything you&rsquo;re missing, remove anything you won&rsquo;t use.
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+        {pantry.categories.map((c) => (
+          <div key={c.name} style={{ background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4, padding: "14px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink }}>{c.name}</span>
+              <button
+                onClick={() => removeCategory(c.name)}
+                style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 11, fontFamily: "'Inter', sans-serif", textDecoration: "underline" }}
+              >
+                remove category
+              </button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {c.items.length === 0 ? (
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>No items yet.</span>
+              ) : (
+                c.items.map((item) => (
+                  <span
+                    key={item}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 8px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
+                  >
+                    {item}
+                    <button
+                      onClick={() => removeItem(c.name, item)}
+                      style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+                placeholder="add an item…"
+                value={newItemDrafts[c.name] || ""}
+                onChange={(e) => setNewItemDrafts((prev) => ({ ...prev, [c.name]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addItem(c.name);
+                  }
+                }}
+              />
+              <Button variant="ghost" onClick={() => addItem(c.name)} style={{ padding: "6px 10px", fontSize: 12 }}>
+                Add
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 24, display: "flex", gap: 8, alignItems: "center", maxWidth: 380 }}>
+        <input
+          style={inputStyle}
+          placeholder="New category name"
+          value={newCategoryName}
+          onChange={(e) => setNewCategoryName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCategory();
+            }
+          }}
+        />
+        <Button variant="ghost" onClick={addCategory}>+ add category</Button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Login ----------
 
 function Login({ onLogin }) {
@@ -1130,6 +1403,7 @@ function Login({ onLogin }) {
 export default function App() {
   const [families, setFamilies] = useState([]);
   const [mealPlan, setMealPlan] = useState({ weeks: {} });
+  const [pantry, setPantry] = useState({ categories: [] });
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState(false);
   const [view, setView] = useState({ screen: "shelf" });
@@ -1155,12 +1429,14 @@ export default function App() {
 
     async function refresh() {
       try {
-        const [server, serverPlan] = await Promise.all([fetchFamilies(), fetchMealPlan()]);
+        const [server, serverPlan, serverPantry] = await Promise.all([fetchFamilies(), fetchMealPlan(), fetchPantry()]);
         if (cancelled) return;
         setFamilies(server);
         cacheFamilies(server);
         setMealPlan(serverPlan);
         cacheMealPlan(serverPlan);
+        setPantry(serverPantry);
+        cachePantry(serverPantry);
         setSyncError(false);
       } catch {
         if (!cancelled) setSyncError(true);
@@ -1172,8 +1448,10 @@ export default function App() {
       if (cached) setFamilies(cached);
       const cachedPlan = loadCachedMealPlan();
       if (cachedPlan) setMealPlan(cachedPlan);
+      const cachedPantry = loadCachedPantry();
+      if (cachedPantry) setPantry(cachedPantry);
       try {
-        const [server, serverPlan] = await Promise.all([fetchFamilies(), fetchMealPlan()]);
+        const [server, serverPlan, serverPantry] = await Promise.all([fetchFamilies(), fetchMealPlan(), fetchPantry()]);
         if (cancelled) return;
         if (server.length === 0 && cached && cached.length > 0) {
           // first load after the shelf became shared: carry this device's
@@ -1186,6 +1464,8 @@ export default function App() {
         }
         setMealPlan(serverPlan);
         cacheMealPlan(serverPlan);
+        setPantry(serverPantry);
+        cachePantry(serverPantry);
         setSyncError(false);
       } catch {
         if (!cancelled) setSyncError(true);
@@ -1256,6 +1536,14 @@ export default function App() {
     setMealPlan(next);
     cacheMealPlan(next);
     pushMealPlan(next)
+      .then(() => setSyncError(false))
+      .catch(() => setSyncError(true));
+  }
+
+  function persistPantry(next) {
+    setPantry(next);
+    cachePantry(next);
+    pushPantry(next)
       .then(() => setSyncError(false))
       .catch(() => setSyncError(true));
   }
@@ -1351,6 +1639,7 @@ export default function App() {
           <Tab label="The shelf" active={view.screen === "shelf" || view.screen === "recipe" || view.screen === "tree"} onClick={() => setView({ screen: "shelf" })} />
           <Tab label="New recipe" active={view.screen === "new"} onClick={() => setView({ screen: "new" })} />
           <Tab label="Meal plan" active={view.screen === "mealplan"} onClick={() => setView({ screen: "mealplan" })} />
+          <Tab label="Pantry" active={view.screen === "pantry"} onClick={() => setView({ screen: "pantry" })} />
         </div>
 
         <div style={{ paddingBottom: 60 }}>
@@ -1364,7 +1653,7 @@ export default function App() {
           )}
 
           {view.screen === "new" && (
-            <NewCulture onCreate={handleCreate} onCancel={() => setView({ screen: "shelf" })} />
+            <NewCulture onCreate={handleCreate} onCancel={() => setView({ screen: "shelf" })} pantry={pantry} families={families} />
           )}
 
           {view.screen === "recipe" && activeFamily && (
@@ -1393,6 +1682,8 @@ export default function App() {
               fromGenId={view.fromGenId}
               onSave={(newGen) => handleSaveCook(activeFamily.id, newGen)}
               onCancel={() => setView({ screen: "recipe", familyId: activeFamily.id, genId: view.fromGenId })}
+              pantry={pantry}
+              families={families}
             />
           )}
 
@@ -1403,6 +1694,10 @@ export default function App() {
               onUpdateSlot={handleUpdateMealSlot}
               onShuffleWeek={handleShuffleWeek}
             />
+          )}
+
+          {view.screen === "pantry" && (
+            <PantryManager pantry={pantry} onUpdatePantry={persistPantry} />
           )}
         </div>
 
