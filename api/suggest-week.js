@@ -1,38 +1,50 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { isAuthed } from "./_auth.js";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-const dayProperties = Object.fromEntries(
-  DAYS.map((day) => [
-    day,
-    {
-      type: "object",
-      properties: {
-        breakfast: { type: "string" },
-        lunch: { type: "string" },
-        dinner: { type: "string" },
-        snacks: { type: "string" },
-      },
-      required: ["breakfast", "lunch", "dinner", "snacks"],
-      additionalProperties: false,
-    },
-  ])
-);
-
-const WEEK_SCHEMA = {
-  type: "object",
-  properties: {
-    days: {
-      type: "object",
-      properties: dayProperties,
-      required: DAYS,
-      additionalProperties: false,
-    },
-  },
-  required: ["days"],
-  additionalProperties: false,
+// Which recipe categories are reasonable picks for each meal slot, in
+// priority order — falls back to the shared "any" pool when a slot's
+// preferred categories have nothing logged yet.
+const SLOT_CATEGORIES = {
+  breakfast: ["Breakfast"],
+  lunch: ["Side", "Main", "Other"],
+  dinner: ["Main", "Dinner", "Sauce & ferment"],
+  snacks: ["Dessert", "Baking", "Other"],
 };
+
+// Used only when the family hasn't logged any recipe that fits a slot yet,
+// so the shuffle still returns something useful for a new cookbook.
+const FALLBACK_IDEAS = {
+  breakfast: ["Cereal & fruit", "Eggs on toast", "Yogurt with granola", "Oatmeal"],
+  lunch: ["Sandwiches", "Leftovers", "Soup & bread", "Big salad"],
+  dinner: ["Leftovers", "Pasta night", "Sheet-pan veggies & protein", "Order in"],
+  snacks: ["Fruit & nuts", "Cheese & crackers", "Popcorn", "Veggies & hummus"],
+};
+
+function shuffled(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// A cycling picker: shuffles the pool once, hands out names one at a time,
+// and reshuffles once exhausted — so a week rarely repeats a dish unless
+// the pool is smaller than 7.
+function cyclingPicker(pool) {
+  let order = shuffled(pool);
+  let i = 0;
+  return () => {
+    if (order.length === 0) return null;
+    if (i >= order.length) {
+      order = shuffled(pool);
+      i = 0;
+    }
+    return order[i++];
+  };
+}
 
 export default async function handler(req, res) {
   if (!isAuthed(req)) {
@@ -46,43 +58,30 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    res.status(500).json({ error: "AI suggestions aren't configured yet — ANTHROPIC_API_KEY is missing." });
-    return;
-  }
+  const { recipes } = req.body || {};
+  const byCategory = {};
+  (Array.isArray(recipes) ? recipes : []).forEach((r) => {
+    if (!r || !r.name || !r.category) return;
+    if (!byCategory[r.category]) byCategory[r.category] = [];
+    byCategory[r.category].push(r.name);
+  });
 
-  const { weekLabel, recipeNames } = req.body || {};
+  const pickers = {};
+  Object.keys(SLOT_CATEGORIES).forEach((slot) => {
+    const pool = [];
+    SLOT_CATEGORIES[slot].forEach((cat) => pool.push(...(byCategory[cat] || [])));
+    pickers[slot] = pool.length ? cyclingPicker(pool) : cyclingPicker(FALLBACK_IDEAS[slot]);
+  });
 
-  const client = new Anthropic();
+  const days = {};
+  DAYS.forEach((day) => {
+    days[day] = {
+      breakfast: pickers.breakfast(),
+      lunch: pickers.lunch(),
+      dinner: pickers.dinner(),
+      snacks: pickers.snacks(),
+    };
+  });
 
-  try {
-    const response = await client.messages.create({
-      model: "claude-opus-5",
-      max_tokens: 2000,
-      output_config: {
-        effort: "low",
-        format: { type: "json_schema", schema: WEEK_SCHEMA },
-      },
-      system:
-        "You plan a family's weekly meals. Suggest one short meal idea (a few words, no instructions) per slot for every day of the week. Favor recipes from the family's own cookbook when they fit, but you can suggest simple everyday meals too. Keep entries brief, like a menu line, e.g. 'Sunday ragù' or 'Yogurt with berries'. Vary meals across the week rather than repeating the same thing daily.",
-      messages: [
-        {
-          role: "user",
-          content: `Plan meals for ${weekLabel || "this week"}. Recipes already in the family cookbook: ${
-            Array.isArray(recipeNames) && recipeNames.length ? recipeNames.join(", ") : "(none logged yet)"
-          }.`,
-        },
-      ],
-    });
-
-    const block = response.content.find((b) => b.type === "text");
-    if (!block) {
-      res.status(502).json({ error: "AI didn't return a plan." });
-      return;
-    }
-    const parsed = JSON.parse(block.text);
-    res.status(200).json(parsed);
-  } catch (err) {
-    res.status(502).json({ error: err.message || "AI suggestion failed." });
-  }
+  res.status(200).json({ days });
 }

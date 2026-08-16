@@ -816,14 +816,14 @@ function weekFillCount(week) {
   return n;
 }
 
-async function suggestWeek(weekLabel, recipeNames) {
+async function suggestWeek(recipes) {
   const res = await fetch("/api/suggest-week", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ weekLabel, recipeNames }),
+    body: JSON.stringify({ recipes }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Couldn't get AI suggestions");
+  if (!res.ok) throw new Error(data.error || "Couldn't shuffle a week");
   return data;
 }
 
@@ -854,19 +854,19 @@ function DayCard({ day, value, onChange }) {
   );
 }
 
-function WeekPanel({ weekNum, week, onUpdateSlot, onAiSuggest, aiLoading, aiError }) {
+function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shuffleError }) {
   return (
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: 0 }}>
           Breakfast, lunch, dinner, and snacks for each day. Start typing to pull a recipe from the shelf, or write anything.
         </p>
-        <Button variant="ghost" onClick={onAiSuggest} disabled={aiLoading}>
-          {aiLoading ? "Thinking…" : "✨ AI-fill this week"}
+        <Button variant="ghost" onClick={onShuffle} disabled={shuffleLoading}>
+          {shuffleLoading ? "Shuffling…" : "🔀 Shuffle in a week"}
         </Button>
       </div>
-      {aiError && (
-        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{aiError}</div>
+      {shuffleError && (
+        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{shuffleError}</div>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
         {WEEK_DAYS.map((day) => (
@@ -882,21 +882,22 @@ function WeekPanel({ weekNum, week, onUpdateSlot, onAiSuggest, aiLoading, aiErro
   );
 }
 
-function MealPlan({ mealPlan, families, onUpdateSlot, onAiSuggestWeek }) {
+function MealPlan({ mealPlan, families, onUpdateSlot, onShuffleWeek }) {
   const [expanded, setExpanded] = useState(null);
-  const [aiLoadingWeek, setAiLoadingWeek] = useState(null);
-  const [aiError, setAiError] = useState("");
+  const [shuffleLoadingWeek, setShuffleLoadingWeek] = useState(null);
+  const [shuffleError, setShuffleError] = useState("");
   const recipeNames = families.map((f) => f.name);
+  const recipes = families.map((f) => ({ name: f.name, category: f.category }));
 
-  async function handleAiSuggest(weekNum) {
-    setAiError("");
-    setAiLoadingWeek(weekNum);
+  async function handleShuffle(weekNum) {
+    setShuffleError("");
+    setShuffleLoadingWeek(weekNum);
     try {
-      await onAiSuggestWeek(weekNum, recipeNames);
+      await onShuffleWeek(weekNum, recipes);
     } catch (err) {
-      setAiError(err.message || "Couldn't get AI suggestions");
+      setShuffleError(err.message || "Couldn't shuffle a week");
     } finally {
-      setAiLoadingWeek(null);
+      setShuffleLoadingWeek(null);
     }
   }
 
@@ -951,9 +952,9 @@ function MealPlan({ mealPlan, families, onUpdateSlot, onAiSuggestWeek }) {
                   weekNum={weekNum}
                   week={week}
                   onUpdateSlot={onUpdateSlot}
-                  onAiSuggest={() => handleAiSuggest(weekNum)}
-                  aiLoading={aiLoadingWeek === weekNum}
-                  aiError={expanded === weekNum ? aiError : ""}
+                  onShuffle={() => handleShuffle(weekNum)}
+                  shuffleLoading={shuffleLoadingWeek === weekNum}
+                  shuffleError={expanded === weekNum ? shuffleError : ""}
                 />
               )}
             </div>
@@ -1175,8 +1176,8 @@ export default function App() {
     persistMealPlan({ ...mealPlan, weeks });
   }
 
-  async function handleAiSuggestWeek(weekNum, recipeNames) {
-    const suggestion = await suggestWeek(`Week ${weekNum}`, recipeNames);
+  async function handleShuffleWeek(weekNum, recipes) {
+    const suggestion = await suggestWeek(recipes);
     const weeks = { ...mealPlan.weeks };
     const week = weeks[weekNum] || { days: {} };
     const days = { ...week.days };
@@ -1304,7 +1305,7 @@ export default function App() {
               mealPlan={mealPlan}
               families={families}
               onUpdateSlot={handleUpdateMealSlot}
-              onAiSuggestWeek={handleAiSuggestWeek}
+              onShuffleWeek={handleShuffleWeek}
             />
           )}
         </div>

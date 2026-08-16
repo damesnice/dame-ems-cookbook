@@ -85,6 +85,41 @@ that's added.
   compiles; full login → shelf → meal-plan flow needs `vercel dev` (or the
   deployed URL) since `/api/*` are Vercel functions, not served by plain
   Vite.
-- Once `ANTHROPIC_API_KEY` is set: open Meal plan → expand a week → "✨
-  AI-fill this week" → confirm all 7 days get short suggestions and nothing
-  already typed gets clobbered.
+
+## 2026-08-16 — Swap the AI meal suggestions for a free shelf shuffle
+
+**What:** Rewrote `api/suggest-week.js` from a Claude API call to a
+rules-based picker over the family's own recipes; removed the
+`@anthropic-ai/sdk` dependency; renamed the AI-flavored identifiers in
+`src/App.jsx` (`onAiSuggestWeek` → `onShuffleWeek`, etc.) and the button
+copy ("✨ AI-fill this week" → "🔀 Shuffle in a week").
+
+**Why:** The Anthropic API is pay-as-you-go, not free — using it here would
+have meant Damon adding billing to an API account for a feature that's cheap
+per call but not zero-cost. Given the choice, he opted for the free option:
+picking from the cookbook's own logged recipes instead of asking an LLM.
+Loses the ability to suggest anything outside the shelf, but needs no API
+key, no billing, and no external call at all.
+
+**How the picker works** — each meal slot maps to the recipe categories that
+make sense for it, falls back to a small built-in idea list when a category
+has nothing logged yet, and cycles through a shuffled pool per slot so a
+week rarely repeats a dish before the pool runs out:
+
+```js
+// api/suggest-week.js — slot → category mapping
+const SLOT_CATEGORIES = {
+  breakfast: ["Breakfast"],
+  lunch: ["Side", "Main", "Other"],
+  dinner: ["Main", "Dinner", "Sauce & ferment"],
+  snacks: ["Dessert", "Baking", "Other"],
+};
+```
+
+Client now sends `{ name, category }` for every recipe (previously just
+names) so the endpoint has enough to sort by slot.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+open Meal plan → expand a week → "🔀 Shuffle in a week" → confirm all 7 days
+fill in from the shelf (or the generic fallback ideas on a fresh cookbook)
+and nothing already typed gets clobbered.
