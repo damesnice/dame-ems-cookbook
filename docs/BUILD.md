@@ -435,3 +435,104 @@ greyed out with "same as Monday all week"; uncheck Monday's box and
 confirm every other day goes back to empty (or whatever it had before, if
 anything); edit Monday's dinner while still linked and confirm the other
 days update without re-checking anything.
+
+## 2026-08-16 — Macro tracking: pantry items, recipes, barcode scanner, meal plan totals
+
+**What:** Calories/protein/carbs/fat on pantry items and recipes, a camera
+barcode scanner for adding pantry items, and per-item + daily-total macro
+display on the meal plan.
+
+**Why, and how the scope got decided:** Damon asked for a "macro calculator
+... add them to every meal and every pantry item," then, when asked how
+recipe macros should be determined, said he wanted it "kind of like my
+fitness pal" with a barcode scanner and photo-based food recognition. That
+photo-scan part needs an AI vision model — the same paid Anthropic API he'd
+already declined for the (much cheaper) meal-suggestion feature — so before
+building anything, I flagged that tradeoff explicitly and asked how he
+wanted to handle it. He chose to build everything free now (manual entry,
+USDA name lookup, barcode scanner) and hold off on photo-based estimation
+until he's ready to add billing.
+
+**Three free, keyless data sources — no signup, no cost:**
+- **Manual entry** — four number fields (calories/protein/carbs/fat) on
+  every pantry item and every recipe.
+- **USDA FoodData Central** (`api/lookup-nutrition.js`) — name-based lookup
+  ("chicken breast" → per-100g macros). Uses the public `DEMO_KEY`, shared
+  and rate-limited (30/hr, 1000/day) but sufficient for occasional family
+  use; if that ever gets hit, a personal key from
+  [fdc.nal.usda.gov/api-key-signup.html](https://fdc.nal.usda.gov/api-key-signup.html)
+  is still free — just set `USDA_API_KEY` in Vercel env.
+- **Open Food Facts** (`api/lookup-barcode.js`) — barcode → product macros,
+  via a free community-run product database. No key at all, ever.
+
+**Barcode scanning** uses `html5-qrcode` (new dependency) instead of the
+browser-native `BarcodeDetector` API, which iOS Safari doesn't support —
+this is a phone-first PWA, so that ruled it out immediately. The scanner
+component lazy-loads the library (`import("html5-qrcode")` inside a
+`useEffect`, not a top-level import) so its ~330KB chunk only downloads
+when someone actually taps "scan a barcode," not on every page load:
+
+```js
+// src/App.jsx — BarcodeScannerModal
+useEffect(() => {
+  import("html5-qrcode").then(({ Html5Qrcode, Html5QrcodeSupportedFormats }) => {
+    const scanner = new Html5Qrcode(regionId, {
+      formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, /* ...UPC/EAN/Code128 */],
+    });
+    scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: {...} },
+      (decodedText) => { /* fire onDetected once, guarded by a ref */ },
+      () => {} // per-frame "nothing found" isn't an error
+    );
+  });
+  return () => { /* stop + clear the camera on unmount */ };
+}, []);
+```
+
+The detected-code callback is guarded with a ref (`detectedRef`) so a
+barcode sitting in frame for multiple scan cycles only fires once. The
+setup effect intentionally has an empty dependency array — `onDetected` is
+wrapped in `useCallback(..., [])` on the caller side specifically so a
+background pantry sync (another family member editing the pantry) can't
+restart the camera mid-scan.
+
+**Data model — additive, no migration needed:**
+
+```js
+// pantry.macros, keyed by exact item name (case-insensitive at read time)
+pantry.macros["Asparagus"] = { serving: "100g", calories: 20, protein: 2, carbs: 4, fat: 0 };
+
+// each recipe generation, entered directly per serving (not computed from
+// ingredients — converting "1 cup" or "2 cloves" into grams is inconsistent
+// enough that a direct number is more trustworthy than a fragile estimate)
+generation.macros = { calories: 420, protein: 32, carbs: 38, fat: 16 };
+```
+
+Both are optional and additive to existing data — nothing needed rewriting.
+Empty macro fields save as `null` rather than a record full of zeros
+(`fieldsToMacros()`), so "0g fat, genuinely" stays distinguishable from
+"never entered."
+
+**Meal plan display** resolves each plan item (a name typed or picked, same
+as any meal plan chip) against a combined pantry+recipe macro index, case-
+insensitively, and shows calories inline on the chip plus a full
+calories/protein/carbs/fat line summed across the whole day — items with no
+macro data on file just don't contribute, no error, no blank slot:
+
+```js
+// src/App.jsx
+function buildMacroIndex(pantry, families) { /* pantry.macros ∪ each recipe's latest-keeper macros, lowercased keys */ }
+function computeDayTotals(week, day, macroIndex) { /* sums every slot's resolved items, following "eat this all week" links */ }
+```
+
+`computeDayTotals` reads through `getEffectiveSlot` (from the repeat-link
+feature), so a day following another day's linked meal counts toward its
+own daily total correctly, instead of showing zero for meals it didn't
+independently enter.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+in Pantry, tap ƒ on an item, look up "banana," confirm fields fill in and
+Save persists a calorie badge on the chip; tap "scan a barcode," scan a
+real product, confirm the confirm-add panel pre-fills name and macros; add
+macros to a recipe and confirm they show on its detail page; in Meal plan,
+add that recipe and a pantry item with macros to the same day and confirm
+the day's total line sums both correctly.

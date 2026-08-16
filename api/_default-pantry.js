@@ -130,4 +130,9 @@ export const DEFAULT_PANTRY = {
       ],
     },
   ],
+  // Per-item macros, keyed by exact item name (case-insensitive match at
+  // read time). Empty until someone fills an item in, looks it up, or
+  // scans a barcode — pre-seeding calories for 180 items isn't something
+  // worth guessing at.
+  macros: {},
 };

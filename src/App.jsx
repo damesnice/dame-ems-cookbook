@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 const COLORS = {
   paper: "#EFE9D8",
@@ -163,6 +163,22 @@ async function pushPantry(pantry) {
   if (!res.ok) throw new Error("Failed to save pantry");
 }
 
+// ---------- macro lookups (free, keyless) ----------
+
+async function lookupNutrition(name) {
+  const res = await fetch(`/api/lookup-nutrition?name=${encodeURIComponent(name)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Lookup failed");
+  return data;
+}
+
+async function lookupBarcode(code) {
+  const res = await fetch(`/api/lookup-barcode?code=${encodeURIComponent(code)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Lookup failed");
+  return data;
+}
+
 // ---------- auth ----------
 
 async function checkSession() {
@@ -304,6 +320,229 @@ function JarBadge({ isKeeper }) {
     >
       {isKeeper ? "keeper" : "note"}
     </span>
+  );
+}
+
+// ---------- Macros ----------
+
+function emptyMacroFields() {
+  return { calories: "", protein: "", carbs: "", fat: "" };
+}
+
+function macrosToFields(macros) {
+  if (!macros) return emptyMacroFields();
+  return {
+    calories: macros.calories ?? "",
+    protein: macros.protein ?? "",
+    carbs: macros.carbs ?? "",
+    fat: macros.fat ?? "",
+  };
+}
+
+// Empty fields save as null (no macro data) rather than a record full of
+// zeros — a dish with genuinely 0g fat looks identical to "never entered"
+// otherwise, and null is what tells everything else there's nothing to show.
+function fieldsToMacros(fields) {
+  const calories = parseFloat(fields.calories) || 0;
+  const protein = parseFloat(fields.protein) || 0;
+  const carbs = parseFloat(fields.carbs) || 0;
+  const fat = parseFloat(fields.fat) || 0;
+  if (!calories && !protein && !carbs && !fat) return null;
+  return { calories, protein, carbs, fat };
+}
+
+function formatMacroLine(macros) {
+  if (!macros) return "";
+  const parts = [];
+  if (macros.calories) parts.push(`${Math.round(macros.calories)} cal`);
+  if (macros.protein) parts.push(`${Math.round(macros.protein)}g protein`);
+  if (macros.carbs) parts.push(`${Math.round(macros.carbs)}g carbs`);
+  if (macros.fat) parts.push(`${Math.round(macros.fat)}g fat`);
+  return parts.join(" · ");
+}
+
+// Case-insensitive lookup across pantry items and shelf recipes, so a meal
+// plan chip named "asparagus" or "Sunday ragù" resolves to whichever has
+// macro data, regardless of typed capitalization.
+function buildMacroIndex(pantry, families) {
+  const index = {};
+  Object.entries(pantry?.macros || {}).forEach(([name, m]) => {
+    if (m) index[name.toLowerCase()] = { ...m, label: name };
+  });
+  families.forEach((f) => {
+    const gen = latestKeeper(f);
+    if (gen?.macros) index[f.name.toLowerCase()] = { ...gen.macros, label: f.name };
+  });
+  return index;
+}
+
+// Sums macros for everything actually planned on one day (across all 4
+// slots, following "eat this all week" links via getEffectiveSlot) —
+// items with no macro data just don't contribute, no error.
+function computeDayTotals(week, day, macroIndex) {
+  const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  let any = false;
+  MEAL_SLOTS.forEach((slot) => {
+    const { value } = getEffectiveSlot(week, day, slot);
+    value.items.forEach((item) => {
+      const m = macroIndex[item.toLowerCase()];
+      if (!m) return;
+      any = true;
+      totals.calories += m.calories || 0;
+      totals.protein += m.protein || 0;
+      totals.carbs += m.carbs || 0;
+      totals.fat += m.fat || 0;
+    });
+  });
+  return any ? totals : null;
+}
+
+const MACRO_FIELD_DEFS = [
+  ["calories", "Calories"],
+  ["protein", "Protein (g)"],
+  ["carbs", "Carbs (g)"],
+  ["fat", "Fat (g)"],
+];
+
+function MacroFields({ fields, onChange }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+      {MACRO_FIELD_DEFS.map(([key, label]) => (
+        <label key={key} style={{ display: "block" }}>
+          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft, marginBottom: 3 }}>
+            {label}
+          </div>
+          <input
+            type="number"
+            min="0"
+            style={{ ...inputStyle, fontSize: 12, padding: "6px 7px" }}
+            value={fields[key]}
+            onChange={(e) => onChange({ ...fields, [key]: e.target.value })}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
+// Inline macro editor for one pantry item: manual fields plus an optional
+// free USDA lookup by the item's own name. Used inside PantryManager.
+function MacroEditor({ itemName, macros, onSave, onCancel }) {
+  const [fields, setFields] = useState(macrosToFields(macros));
+  const [serving, setServing] = useState(macros?.serving || "100g");
+  const [looking, setLooking] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleLookup() {
+    setLooking(true);
+    setError("");
+    try {
+      const result = await lookupNutrition(itemName);
+      setFields({ calories: result.calories, protein: result.protein, carbs: result.carbs, fat: result.fat });
+      setServing(result.serving || "100g");
+    } catch (err) {
+      setError(err.message || "Lookup failed");
+    } finally {
+      setLooking(false);
+    }
+  }
+
+  function handleSave() {
+    const parsed = fieldsToMacros(fields);
+    onSave(parsed ? { ...parsed, serving: serving.trim() || "100g" } : null);
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: "10px 12px", background: COLORS.paper, border: `1px solid ${COLORS.line}`, borderRadius: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+        <input
+          style={{ ...inputStyle, fontSize: 11.5, padding: "5px 7px", width: 110 }}
+          placeholder="serving, e.g. 100g"
+          value={serving}
+          onChange={(e) => setServing(e.target.value)}
+        />
+        <Button variant="ghost" onClick={handleLookup} disabled={looking} style={{ fontSize: 11, padding: "5px 9px" }}>
+          {looking ? "Looking up…" : "🔍 look up"}
+        </Button>
+      </div>
+      <MacroFields fields={fields} onChange={setFields} />
+      {error && <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 6 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <Button onClick={handleSave} style={{ fontSize: 11, padding: "5px 10px" }}>Save</Button>
+        <Button variant="ghost" onClick={onCancel} style={{ fontSize: 11, padding: "5px 10px" }}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+// Camera-based barcode scanner (html5-qrcode). Loaded lazily so the
+// scanning library only downloads when someone actually opens this.
+function BarcodeScannerModal({ onDetected, onClose }) {
+  const regionId = "barcode-scanner-region";
+  const scannerRef = useRef(null);
+  const detectedRef = useRef(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    import("html5-qrcode").then(({ Html5Qrcode, Html5QrcodeSupportedFormats }) => {
+      if (cancelled) return;
+      const scanner = new Html5Qrcode(regionId, {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_128,
+        ],
+      });
+      scannerRef.current = scanner;
+      scanner
+        .start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 260, height: 160 } },
+          (decodedText) => {
+            if (detectedRef.current) return;
+            detectedRef.current = true;
+            onDetected(decodedText);
+          },
+          () => {
+            // per-frame "nothing found yet" — not an error, ignore
+          }
+        )
+        .catch((err) => setError(err?.message || "Couldn't start the camera"));
+    });
+
+    return () => {
+      cancelled = true;
+      const scanner = scannerRef.current;
+      if (scanner) {
+        scanner
+          .stop()
+          .then(() => scanner.clear())
+          .catch(() => {});
+      }
+    };
+  }, [onDetected]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(36,41,31,0.85)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: COLORS.paper, borderRadius: 6, padding: 20, maxWidth: 420, width: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={{ fontFamily: "'Fraunces', serif", fontSize: 17, fontWeight: 500, color: COLORS.ink }}>Scan a barcode</span>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 20, cursor: "pointer", lineHeight: 1, padding: 0 }}>
+            ×
+          </button>
+        </div>
+        <div id={regionId} style={{ width: "100%", borderRadius: 4, overflow: "hidden" }} />
+        {error && (
+          <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginTop: 10 }}>{error}</div>
+        )}
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft, marginTop: 10, marginBottom: 0 }}>
+          Point your camera at a product&rsquo;s barcode.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -547,6 +786,7 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
   const [ingredients, setIngredients] = useState([{ id: uid(), name: "", amount: "", unit: "" }]);
   const [steps, setSteps] = useState("");
   const [notes, setNotes] = useState("");
+  const [macroFields, setMacroFields] = useState(emptyMacroFields());
 
   function updateIng(id, field, val) {
     setIngredients((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
@@ -587,6 +827,7 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
           ingredients: cleanIngredients,
           steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
           notes: notes.trim(),
+          macros: fieldsToMacros(macroFields),
           rating: 0,
           isKeeper: true,
           cookedDate: todayISO(),
@@ -651,6 +892,10 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
         <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this came from, what makes it work." />
       </Field>
 
+      <Field label="Macros per serving (optional)">
+        <MacroFields fields={macroFields} onChange={setMacroFields} />
+      </Field>
+
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
         <Button onClick={submit}>Save recipe</Button>
         <Button variant="ghost" onClick={onCancel}>Cancel</Button>
@@ -706,6 +951,12 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, minWidth: 20, textAlign: "center" }}>{servings}</span>
           <button onClick={() => setServings((s) => s + 1)} style={{ width: 24, height: 24, border: `1px solid ${COLORS.line}`, background: "transparent", cursor: "pointer", borderRadius: 3 }}>+</button>
         </div>
+
+        {gen.macros && (
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 18 }}>
+            Per serving: {formatMacroLine(gen.macros)}
+          </div>
+        )}
 
         <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${COLORS.line}` }}>
           Ingredients
@@ -766,6 +1017,7 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
   const [rating, setRating] = useState(0);
   const [notes, setNotes] = useState("");
   const [isKeeper, setIsKeeper] = useState(true);
+  const [macroFields, setMacroFields] = useState(macrosToFields(base.macros));
 
   function updateIng(id, field, val) {
     setIngredients((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
@@ -796,6 +1048,7 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
       ingredients: ingredients.filter((i) => i.name.trim()).map((i) => ({ ...i, amount: parseFloat(i.amount) || 0 })),
       steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
       notes: notes.trim(),
+      macros: fieldsToMacros(macroFields),
       rating,
       isKeeper,
       cookedDate: todayISO(),
@@ -849,6 +1102,10 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
 
       <Field label="Notes on this attempt">
         <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What you'd do differently next time." />
+      </Field>
+
+      <Field label="Macros per serving (optional)">
+        <MacroFields fields={macroFields} onChange={setMacroFields} />
       </Field>
 
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.ink, cursor: "pointer" }}>
@@ -1055,7 +1312,7 @@ function pillStyle(active) {
 // One slot (e.g. "dinner") can hold more than one thing — a main plus a
 // side or two. Items can be typed, or browsed from the shelf's recipes and
 // the pantry (so "asparagus" as a side is one tap, not a typed sentence).
-function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek, onUnrepeatWeek, isSource, isLinked, sourceDay }) {
+function MealItemSlot({ slot, value, pantry, families, macroIndex = {}, onChange, onRepeatWeek, onUnrepeatWeek, isSource, isLinked, sourceDay }) {
   const [draft, setDraft] = useState("");
   const [browsing, setBrowsing] = useState(false);
   const [source, setSource] = useState("recipes");
@@ -1076,14 +1333,18 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek, o
         </div>
         {slotValue.items.length > 0 ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 4 }}>
-            {slotValue.items.map((item) => (
-              <span
-                key={item}
-                style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: COLORS.paper, color: COLORS.inkSoft }}
-              >
-                {item}
-              </span>
-            ))}
+            {slotValue.items.map((item) => {
+              const m = macroIndex[item.toLowerCase()];
+              return (
+                <span
+                  key={item}
+                  style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: COLORS.paper, color: COLORS.inkSoft }}
+                >
+                  {item}
+                  {m && <span style={{ fontSize: 10.5 }}> · {Math.round(m.calories)}cal</span>}
+                </span>
+              );
+            })}
           </div>
         ) : (
           <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>—</span>
@@ -1151,21 +1412,25 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek, o
 
       {slotValue.items.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
-          {slotValue.items.map((item) => (
-            <span
-              key={item}
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
-            >
-              {item}
-              <button
-                type="button"
-                onClick={() => removeItem(item)}
-                style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+          {slotValue.items.map((item) => {
+            const m = macroIndex[item.toLowerCase()];
+            return (
+              <span
+                key={item}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
               >
-                ×
-              </button>
-            </span>
-          ))}
+                {item}
+                {m && <span style={{ color: COLORS.inkSoft, fontSize: 10.5 }}>· {Math.round(m.calories)}cal</span>}
+                <button
+                  type="button"
+                  onClick={() => removeItem(item)}
+                  style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -1267,7 +1532,8 @@ function MealItemSlot({ slot, value, pantry, families, onChange, onRepeatWeek, o
   );
 }
 
-function DayCard({ day, week, pantry, families, onChange, onRepeatWeek, onUnrepeatWeek }) {
+function DayCard({ day, week, pantry, families, macroIndex, onChange, onRepeatWeek, onUnrepeatWeek }) {
+  const totals = computeDayTotals(week, day, macroIndex);
   return (
     <div style={{ background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4, padding: "14px 16px" }}>
       <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 4 }}>
@@ -1283,6 +1549,7 @@ function DayCard({ day, week, pantry, families, onChange, onRepeatWeek, onUnrepe
                 value={value}
                 pantry={pantry}
                 families={families}
+                macroIndex={macroIndex}
                 onChange={onChange}
                 onRepeatWeek={() => onRepeatWeek(slot)}
                 onUnrepeatWeek={() => onUnrepeatWeek(slot)}
@@ -1294,11 +1561,16 @@ function DayCard({ day, week, pantry, families, onChange, onRepeatWeek, onUnrepe
           );
         })}
       </div>
+      {totals && (
+        <div style={{ marginTop: 6, paddingTop: 8, borderTop: `1px solid ${COLORS.line}`, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft }}>
+          Today: {formatMacroLine(totals)}
+        </div>
+      )}
     </div>
   );
 }
 
-function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError }) {
+function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError }) {
   return (
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
@@ -1320,6 +1592,7 @@ function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onRepeatSlot
             week={week}
             pantry={pantry}
             families={families}
+            macroIndex={macroIndex}
             onChange={(slot, patch) => onUpdateSlot(weekNum, day, slot, patch)}
             onRepeatWeek={(slot) => onRepeatSlotWeek(weekNum, day, slot)}
             onUnrepeatWeek={(slot) => onUnrepeatSlotWeek(weekNum, slot)}
@@ -1338,6 +1611,7 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
   const mealItemNames = [
     ...new Set([...families.map((f) => f.name), ...(pantry?.categories || []).flatMap((c) => c.items)]),
   ].sort((a, b) => a.localeCompare(b));
+  const macroIndex = buildMacroIndex(pantry, families);
 
   async function handleShuffle(weekNum) {
     setShuffleError("");
@@ -1403,6 +1677,7 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
                   week={week}
                   pantry={pantry}
                   families={families}
+                  macroIndex={macroIndex}
                   onUpdateSlot={onUpdateSlot}
                   onRepeatSlotWeek={onRepeatSlotWeek}
                   onUnrepeatSlotWeek={onUnrepeatSlotWeek}
@@ -1424,6 +1699,11 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
 function PantryManager({ pantry, onUpdatePantry }) {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newItemDrafts, setNewItemDrafts] = useState({});
+  const [editingItem, setEditingItem] = useState(null); // { category, item } | null
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState(null); // { code, label, serving, calories, protein, carbs, fat }
+  const [scanCategory, setScanCategory] = useState(pantry.categories[0]?.name || "");
+  const [scanError, setScanError] = useState("");
 
   function addItem(categoryName) {
     const val = (newItemDrafts[categoryName] || "").trim();
@@ -1440,11 +1720,14 @@ function PantryManager({ pantry, onUpdatePantry }) {
   }
 
   function removeItem(categoryName, item) {
+    const macros = { ...(pantry.macros || {}) };
+    delete macros[item];
     onUpdatePantry({
       ...pantry,
       categories: pantry.categories.map((c) =>
         c.name === categoryName ? { ...c, items: c.items.filter((it) => it !== item) } : c
       ),
+      macros,
     });
   }
 
@@ -1459,12 +1742,68 @@ function PantryManager({ pantry, onUpdatePantry }) {
     onUpdatePantry({ ...pantry, categories: pantry.categories.filter((c) => c.name !== categoryName) });
   }
 
+  function saveItemMacros(item, macros) {
+    const next = { ...(pantry.macros || {}) };
+    if (macros) next[item] = macros;
+    else delete next[item];
+    onUpdatePantry({ ...pantry, macros: next });
+    setEditingItem(null);
+  }
+
+  // Stable identity so the scanner's camera doesn't restart if PantryManager
+  // re-renders mid-scan (e.g. a background pantry sync from another device).
+  const handleBarcodeDetected = useCallback(async (code) => {
+    setScanning(false);
+    setScanError("");
+    try {
+      const result = await lookupBarcode(code);
+      setScanResult({ code, ...result });
+    } catch (err) {
+      setScanError(err.message || "Couldn't find that product");
+    }
+  }, []);
+
+  function confirmScannedItem(name, fields, serving) {
+    const val = name.trim();
+    if (!val) return;
+    const category = scanCategory || pantry.categories[0]?.name;
+    const macros = fieldsToMacros(fields);
+    onUpdatePantry({
+      ...pantry,
+      categories: pantry.categories.map((c) =>
+        c.name === category && !c.items.some((it) => it.toLowerCase() === val.toLowerCase())
+          ? { ...c, items: [...c.items, val] }
+          : c
+      ),
+      macros: macros ? { ...(pantry.macros || {}), [val]: { ...macros, serving: serving || "100g" } } : pantry.macros || {},
+    });
+    setScanResult(null);
+  }
+
   return (
     <div>
-      <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, marginBottom: 4 }}>Pantry</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 4 }}>
+        <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, margin: 0 }}>Pantry</h2>
+        <Button variant="ghost" onClick={() => setScanning(true)}>📷 scan a barcode</Button>
+      </div>
       <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 20 }}>
-        What shows up as quick-add chips when you&rsquo;re logging ingredients. Add anything you&rsquo;re missing, remove anything you won&rsquo;t use.
+        What shows up as quick-add chips when you&rsquo;re logging ingredients. Add anything you&rsquo;re missing, remove anything you won&rsquo;t use — tap <strong>ƒ</strong> on an item to add its calories/protein/carbs/fat.
       </p>
+
+      {scanError && (
+        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 16 }}>{scanError}</div>
+      )}
+
+      {scanResult && (
+        <ScannedItemConfirm
+          result={scanResult}
+          categories={pantry.categories.map((c) => c.name)}
+          category={scanCategory}
+          onCategoryChange={setScanCategory}
+          onConfirm={confirmScannedItem}
+          onCancel={() => setScanResult(null)}
+        />
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
         {pantry.categories.map((c) => (
@@ -1482,23 +1821,46 @@ function PantryManager({ pantry, onUpdatePantry }) {
               {c.items.length === 0 ? (
                 <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>No items yet.</span>
               ) : (
-                c.items.map((item) => (
-                  <span
-                    key={item}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 8px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
-                  >
-                    {item}
-                    <button
-                      onClick={() => removeItem(c.name, item)}
-                      style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                c.items.map((item) => {
+                  const macros = pantry.macros?.[item];
+                  return (
+                    <span
+                      key={item}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 6px 4px 8px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
                     >
-                      ×
-                    </button>
-                  </span>
-                ))
+                      {item}
+                      {macros && (
+                        <span style={{ color: COLORS.inkSoft, fontSize: 10.5 }}>· {Math.round(macros.calories)}cal</span>
+                      )}
+                      <button
+                        onClick={() => setEditingItem({ category: c.name, item })}
+                        title="Edit macros"
+                        style={{ border: "none", background: "transparent", color: macros ? COLORS.moss : COLORS.plum, cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "0 2px", fontStyle: "italic" }}
+                      >
+                        ƒ
+                      </button>
+                      <button
+                        onClick={() => removeItem(c.name, item)}
+                        style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })
               )}
             </div>
-            <div style={{ display: "flex", gap: 6 }}>
+
+            {editingItem?.category === c.name && (
+              <MacroEditor
+                itemName={editingItem.item}
+                macros={pantry.macros?.[editingItem.item]}
+                onSave={(macros) => saveItemMacros(editingItem.item, macros)}
+                onCancel={() => setEditingItem(null)}
+              />
+            )}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
               <input
                 style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
                 placeholder="add an item…"
@@ -1533,6 +1895,49 @@ function PantryManager({ pantry, onUpdatePantry }) {
           }}
         />
         <Button variant="ghost" onClick={addCategory}>+ add category</Button>
+      </div>
+
+      {scanning && (
+        <BarcodeScannerModal onDetected={handleBarcodeDetected} onClose={() => setScanning(false)} />
+      )}
+    </div>
+  );
+}
+
+function ScannedItemConfirm({ result, categories, category, onCategoryChange, onConfirm, onCancel }) {
+  const [name, setName] = useState(result.label);
+  const [fields, setFields] = useState({
+    calories: result.calories,
+    protein: result.protein,
+    carbs: result.carbs,
+    fat: result.fat,
+  });
+  const [serving, setServing] = useState(result.serving || "100g");
+
+  return (
+    <div style={{ marginBottom: 20, padding: "14px 16px", background: COLORS.card, border: `1px solid ${COLORS.plum}`, borderRadius: 4, maxWidth: 420 }}>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.plum, marginBottom: 8 }}>
+        Add scanned item
+      </div>
+      <Field label="Name">
+        <input style={{ ...inputStyle, fontSize: 13 }} value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+        <Field label="Category">
+          <select style={inputStyle} value={category} onChange={(e) => onCategoryChange(e.target.value)}>
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Serving">
+          <input style={inputStyle} value={serving} onChange={(e) => setServing(e.target.value)} />
+        </Field>
+      </div>
+      <MacroFields fields={fields} onChange={setFields} />
+      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+        <Button onClick={() => onConfirm(name, fields, serving)}>Add to pantry</Button>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   );
