@@ -255,3 +255,55 @@ few from different categories, confirm amount/unit stay editable per row;
 go to Pantry, remove an item, come back to New recipe and confirm it's
 gone from the chips; add a made-up item to Pantry and confirm it shows up
 as a chip immediately.
+
+## 2026-08-16 — Meal plan slots hold multiple items, browsable from pantry + recipes
+
+**What:** Meal plan slots (breakfast/lunch/dinner/snacks) went from one text
+field to a tag list — a main plus any sides — with a "browse" panel to pull
+items from the shelf's recipes or the pantry instead of typing.
+
+**Why:** Damon didn't want breakfast limited to one line — he wanted to add
+a main and a side (his example: asparagus as a side) without cramming it
+into one string, and wanted to pick sides from the pantry rather than type
+them out. Asked to keep it "not too cluttered" — the browse panel is
+collapsed by default (a "browse" toggle next to the add field) so a slot
+with nothing browsed stays as compact as the old single-line version.
+
+**Data model, third shape now:** slots have gone plain string → `{ text,
+image }` → `{ items: [], image }` as the feature grew. Rather than migrate
+stored data again, `normalizeSlot()` (already handling the string → object
+migration) got a third branch, so every already-saved plan — from any of
+the last three deploys — keeps reading correctly with no migration step:
+
+```js
+// src/App.jsx
+function normalizeSlot(value) {
+  if (value && typeof value === "object") {
+    if (Array.isArray(value.items)) return { items: value.items, image: value.image || null };
+    return { items: value.text ? [value.text] : [], image: value.image || null };
+  }
+  return { items: value ? [value] : [], image: null };
+}
+```
+
+**The browse panel has two sources**, switchable with a small pill toggle:
+"Recipes" (grouped by the same categories as the shelf — Main, Breakfast,
+Dessert, etc.) and "Pantry" (grouped by pantry category), both with a
+search box that flattens across categories while typing. The add-field
+itself still autocompletes too (`list="mealplan-item-names"`, combining
+recipe names + every pantry item) — same "let both styles work" choice as
+the ingredient picker. Picking an item appends to that slot's `items`
+array; already-added items are filtered out of the browse results so you
+don't see a chip you can already see chipped above it.
+
+Day cards changed from a 2×2 grid of short fields to a single-column stack
+of slot rows — the old grid was fine for one line per slot, but felt
+cramped once a slot could hold several chips plus an expandable browse
+panel. Week view is now a vertical list of full-width day cards instead of
+a multi-column grid, for the same reason.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+open Meal plan → expand a week → on a day's Dinner slot, browse Recipes and
+add one, then browse Pantry and add "Asparagus" as a second item, confirm
+both show as separate removable chips; confirm a week planned before this
+change still shows its old single item correctly.

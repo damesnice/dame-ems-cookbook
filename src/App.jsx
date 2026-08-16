@@ -961,21 +961,22 @@ const MEAL_SLOTS = ["breakfast", "lunch", "dinner", "snacks"];
 const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 function emptySlot() {
-  return { text: "", image: null };
+  return { items: [], image: null };
 }
 
 function emptyDay() {
   return { breakfast: emptySlot(), lunch: emptySlot(), dinner: emptySlot(), snacks: emptySlot() };
 }
 
-// Meal slots used to be a plain string; normalize older saved plans (and any
-// half-filled slot) into the { text, image } shape so every reader can rely
-// on it.
+// Slots have gone through a couple of shapes as the feature grew (a plain
+// string, then { text, image }, now { items: [], image }) — normalize
+// whatever's stored into the current shape so every reader can rely on it.
 function normalizeSlot(value) {
   if (value && typeof value === "object") {
-    return { text: value.text || "", image: value.image || null };
+    if (Array.isArray(value.items)) return { items: value.items, image: value.image || null };
+    return { items: value.text ? [value.text] : [], image: value.image || null };
   }
-  return { text: value || "", image: null };
+  return { items: value ? [value] : [], image: null };
 }
 
 function weekFillCount(week) {
@@ -985,7 +986,7 @@ function weekFillCount(week) {
     const d = week.days?.[day];
     if (!d) return;
     MEAL_SLOTS.forEach((slot) => {
-      if (normalizeSlot(d[slot]).text.trim()) n += 1;
+      if (normalizeSlot(d[slot]).items.length) n += 1;
     });
   });
   return n;
@@ -1027,42 +1028,172 @@ function resizeImageFile(file, maxDim = 480, quality = 0.72) {
   });
 }
 
-function MealSlotField({ slot, value, onChange }) {
-  const [error, setError] = useState("");
+function pillStyle(active) {
+  return {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 11,
+    fontWeight: 500,
+    padding: "3px 10px",
+    borderRadius: 20,
+    border: `1px solid ${active ? COLORS.plum : COLORS.line}`,
+    background: active ? COLORS.plum : "transparent",
+    color: active ? "#F7F1EA" : COLORS.inkSoft,
+    cursor: "pointer",
+  };
+}
+
+// One slot (e.g. "dinner") can hold more than one thing — a main plus a
+// side or two. Items can be typed, or browsed from the shelf's recipes and
+// the pantry (so "asparagus" as a side is one tap, not a typed sentence).
+function MealItemSlot({ slot, value, pantry, families, onChange }) {
+  const [draft, setDraft] = useState("");
+  const [browsing, setBrowsing] = useState(false);
+  const [source, setSource] = useState("recipes");
+  const [activeCat, setActiveCat] = useState(null);
+  const [search, setSearch] = useState("");
+  const [imgError, setImgError] = useState("");
+
   const slotValue = normalizeSlot(value);
+  const hasItem = (name) => slotValue.items.some((it) => it.toLowerCase() === name.toLowerCase());
+
+  function addItem(name) {
+    const clean = name.trim();
+    if (!clean || hasItem(clean)) return;
+    onChange(slot, { items: [...slotValue.items, clean] });
+  }
+
+  function removeItem(name) {
+    onChange(slot, { items: slotValue.items.filter((it) => it !== name) });
+  }
+
+  function handleDraftSubmit(e) {
+    e.preventDefault();
+    addItem(draft);
+    setDraft("");
+  }
 
   async function handlePickImage(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    setError("");
+    setImgError("");
     try {
       const dataUrl = await resizeImageFile(file);
       onChange(slot, { image: dataUrl });
     } catch (err) {
-      setError(err.message || "Couldn't attach that photo");
+      setImgError(err.message || "Couldn't attach that photo");
     }
   }
 
+  const recipesByCategory = {};
+  families.forEach((f) => {
+    (recipesByCategory[f.category] ||= []).push(f.name);
+  });
+  const pantryCategories = pantry?.categories || [];
+
+  const categories = source === "recipes" ? Object.keys(recipesByCategory).sort() : pantryCategories.map((c) => c.name);
+  const activeCatSafe = categories.includes(activeCat) ? activeCat : categories[0] || null;
+  const q = search.trim().toLowerCase();
+
+  const pool = q
+    ? source === "recipes"
+      ? Object.values(recipesByCategory).flat()
+      : pantryCategories.flatMap((c) => c.items)
+    : source === "recipes"
+      ? recipesByCategory[activeCatSafe] || []
+      : pantryCategories.find((c) => c.name === activeCatSafe)?.items || [];
+  const visible = (q ? pool.filter((it) => it.toLowerCase().includes(q)) : pool).filter((it) => !hasItem(it));
+
   return (
-    <label style={{ display: "block" }}>
-      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 4 }}>
+    <div style={{ padding: "10px 0" }}>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.inkSoft, marginBottom: 6 }}>
         {slot}
       </div>
-      <input
-        style={{ ...inputStyle, fontSize: 13, padding: "7px 8px" }}
-        list="cookbook-recipe-names"
-        value={slotValue.text}
-        onChange={(e) => onChange(slot, { text: e.target.value })}
-        placeholder="type a meal, or pick from the shelf"
-      />
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, minHeight: 20 }}>
+
+      {slotValue.items.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
+          {slotValue.items.map((item) => (
+            <span
+              key={item}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
+            >
+              {item}
+              <button
+                type="button"
+                onClick={() => removeItem(item)}
+                style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={handleDraftSubmit} style={{ display: "flex", gap: 6 }}>
+        <input
+          style={{ ...inputStyle, fontSize: 12.5, padding: "6px 8px", flex: 1 }}
+          list="mealplan-item-names"
+          placeholder="add a main, a side…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="button" onClick={() => setBrowsing((b) => !b)} style={pillStyle(browsing)}>
+          browse
+        </button>
+      </form>
+
+      {browsing && (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: COLORS.paper, border: `1px solid ${COLORS.line}`, borderRadius: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <button type="button" onClick={() => { setSource("recipes"); setActiveCat(null); }} style={pillStyle(source === "recipes")}>
+              Recipes
+            </button>
+            <button type="button" onClick={() => { setSource("pantry"); setActiveCat(null); }} style={pillStyle(source === "pantry")}>
+              Pantry
+            </button>
+            <input
+              style={{ ...inputStyle, fontSize: 11, padding: "4px 7px", marginLeft: "auto", width: 100 }}
+              placeholder="search…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          {!q && categories.length > 1 && (
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
+              {categories.map((cat) => (
+                <button key={cat} type="button" onClick={() => setActiveCat(cat)} style={pillStyle(cat === activeCatSafe)}>
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, maxHeight: 130, overflowY: "auto" }}>
+            {visible.length === 0 ? (
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft }}>Nothing here yet.</span>
+            ) : (
+              visible.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => addItem(item)}
+                  style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 9px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink, cursor: "pointer" }}
+                >
+                  + {item}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, minHeight: 18 }}>
         {slotValue.image ? (
           <>
             <img
               src={slotValue.image}
-              alt={slotValue.text || slot}
-              style={{ width: 30, height: 30, borderRadius: 4, objectFit: "cover", border: `1px solid ${COLORS.line}` }}
+              alt=""
+              style={{ width: 26, height: 26, borderRadius: 4, objectFit: "cover", border: `1px solid ${COLORS.line}` }}
             />
             <button
               type="button"
@@ -1079,35 +1210,37 @@ function MealSlotField({ slot, value, onChange }) {
           </label>
         )}
       </div>
-      {error && (
-        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{error}</div>
+      {imgError && (
+        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>
       )}
-    </label>
+    </div>
   );
 }
 
-function DayCard({ day, value, onChange }) {
+function DayCard({ day, value, pantry, families, onChange }) {
   const day5 = value || emptyDay();
   return (
     <div style={{ background: COLORS.card, border: `1px solid ${COLORS.line}`, borderRadius: 4, padding: "14px 16px" }}>
-      <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 10 }}>
+      <div style={{ fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 500, color: COLORS.ink, marginBottom: 4 }}>
         {day}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {MEAL_SLOTS.map((slot) => (
-          <MealSlotField key={slot} slot={slot} value={day5[slot]} onChange={onChange} />
+      <div>
+        {MEAL_SLOTS.map((slot, idx) => (
+          <div key={slot} style={{ borderTop: idx === 0 ? "none" : `1px solid ${COLORS.line}` }}>
+            <MealItemSlot slot={slot} value={day5[slot]} pantry={pantry} families={families} onChange={onChange} />
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shuffleError }) {
+function WeekPanel({ weekNum, week, pantry, families, onUpdateSlot, onShuffle, shuffleLoading, shuffleError }) {
   return (
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: 0 }}>
-          Breakfast, lunch, dinner, and snacks for each day. Type a meal (pick from the shelf or write your own), and add a photo if you like.
+          Add a main and any sides for each slot — browse your recipes and pantry, or just type. A photo&rsquo;s optional.
         </p>
         <Button variant="ghost" onClick={onShuffle} disabled={shuffleLoading}>
           {shuffleLoading ? "Shuffling…" : "🔀 Shuffle in a week"}
@@ -1116,12 +1249,14 @@ function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shu
       {shuffleError && (
         <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{shuffleError}</div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {WEEK_DAYS.map((day) => (
           <DayCard
             key={day}
             day={day}
             value={week?.days?.[day]}
+            pantry={pantry}
+            families={families}
             onChange={(slot, patch) => onUpdateSlot(weekNum, day, slot, patch)}
           />
         ))}
@@ -1130,12 +1265,14 @@ function WeekPanel({ weekNum, week, onUpdateSlot, onShuffle, shuffleLoading, shu
   );
 }
 
-function MealPlan({ mealPlan, families, onUpdateSlot, onShuffleWeek }) {
+function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onShuffleWeek }) {
   const [expanded, setExpanded] = useState(null);
   const [shuffleLoadingWeek, setShuffleLoadingWeek] = useState(null);
   const [shuffleError, setShuffleError] = useState("");
-  const recipeNames = families.map((f) => f.name);
   const recipes = families.map((f) => ({ name: f.name, category: f.category }));
+  const mealItemNames = [
+    ...new Set([...families.map((f) => f.name), ...(pantry?.categories || []).flatMap((c) => c.items)]),
+  ].sort((a, b) => a.localeCompare(b));
 
   async function handleShuffle(weekNum) {
     setShuffleError("");
@@ -1151,8 +1288,8 @@ function MealPlan({ mealPlan, families, onUpdateSlot, onShuffleWeek }) {
 
   return (
     <div>
-      <datalist id="cookbook-recipe-names">
-        {recipeNames.map((n) => (
+      <datalist id="mealplan-item-names">
+        {mealItemNames.map((n) => (
           <option key={n} value={n} />
         ))}
       </datalist>
@@ -1199,6 +1336,8 @@ function MealPlan({ mealPlan, families, onUpdateSlot, onShuffleWeek }) {
                 <WeekPanel
                   weekNum={weekNum}
                   week={week}
+                  pantry={pantry}
+                  families={families}
                   onUpdateSlot={onUpdateSlot}
                   onShuffle={() => handleShuffle(weekNum)}
                   shuffleLoading={shuffleLoadingWeek === weekNum}
@@ -1569,7 +1708,7 @@ export default function App() {
       const suggested = suggestion.days?.[day] || {};
       MEAL_SLOTS.forEach((slot) => {
         const current = normalizeSlot(dayObj[slot]);
-        dayObj[slot] = !current.text && suggested[slot] ? { ...current, text: suggested[slot] } : current;
+        dayObj[slot] = current.items.length === 0 && suggested[slot] ? { ...current, items: [suggested[slot]] } : current;
       });
       days[day] = dayObj;
     });
@@ -1691,6 +1830,7 @@ export default function App() {
             <MealPlan
               mealPlan={mealPlan}
               families={families}
+              pantry={pantry}
               onUpdateSlot={handleUpdateMealSlot}
               onShuffleWeek={handleShuffleWeek}
             />
