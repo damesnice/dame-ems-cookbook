@@ -536,3 +536,51 @@ real product, confirm the confirm-add panel pre-fills name and macros; add
 macros to a recipe and confirm they show on its detail page; in Meal plan,
 add that recipe and a pantry item with macros to the same day and confirm
 the day's total line sums both correctly.
+
+## 2026-08-17 — Fix: barcode scan showed inflated macros (was per-100g, not per-serving)
+
+**What:** `api/lookup-barcode.js` now prefers Open Food Facts' actual
+per-serving nutrition figures over its per-100g figures, and reports the
+real serving description ("1 bar (24 g)") instead of always saying "100g."
+
+**Why:** Damon reported the scanner identified the right product but with
+wrong numbers. Traced it by fetching a real product (a Quaker granola bar,
+barcode `0030000311752`) directly from Open Food Facts and comparing both
+figures it returns for the same item:
+
+| | per 100g (what we showed) | per actual serving — 1 bar, 24g (what the box says) |
+|---|---|---|
+| calories | 417 | 100 |
+| protein | 4g | 1g |
+| carbs | 71g | 17g |
+| fat | 17g | 4g |
+
+A ~4x overstatement — because almost no real-world serving is 100g, and the
+old code only ever read the `_100g`-suffixed fields. Open Food Facts
+carries both; the fix reads `_serving` fields (and the product's real
+`serving_size` string) whenever they're present, falling back to `_100g`
+only when a product has no per-serving data at all:
+
+```js
+// api/lookup-barcode.js
+const kcal = (suffix) => num(n[`energy-kcal${suffix}`]) ?? (num(n[`energy${suffix}`]) != null ? n[`energy${suffix}`] / 4.184 : null);
+const useServing = !!data.product.serving_size && kcal("_serving") != null;
+const suffix = useServing ? "_serving" : "_100g";
+// serving_size / protein / carbs / fat all read through the same suffix
+```
+
+Added a kJ→kcal fallback (`energy${suffix} / 4.184`) too, for the rare
+product that has energy data but no `energy-kcal` variant — same class of
+"missing field silently shows 0" bug, caught while fixing the main one.
+
+**Not fixed, and can't fully be:** Open Food Facts is crowd-sourced, so a
+specific product's data can still be wrong or missing regardless of which
+field we read — that's a data-source limitation, not a bug. The confirm-add
+screen (already there) is the safety net: it shows the resolved serving
+size and macros editable, before anything saves, specifically so a bad or
+missing entry can be corrected by hand rather than trusted blindly.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+scan a packaged snack (not a raw 100g-labeled item), and confirm the
+confirm-add panel shows a serving like "1 bar (24g)" with numbers that
+match the actual nutrition label, not numbers ~4x too high.

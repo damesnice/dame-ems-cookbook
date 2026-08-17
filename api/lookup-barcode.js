@@ -25,14 +25,25 @@ export default async function handler(req, res) {
       res.status(404).json({ error: "No product found for that barcode" });
       return;
     }
+
     const n = data.product.nutriments || {};
+    const num = (v) => (typeof v === "number" ? v : null);
+    // Open Food Facts carries both per-100g and per-actual-serving figures.
+    // A serving is almost never 100g (a granola bar's serving is ~24g), so
+    // defaulting to per-100g overstates everything by several times over —
+    // prefer the real per-serving numbers whenever the product has them.
+    const kcal = (suffix) => num(n[`energy-kcal${suffix}`]) ?? (num(n[`energy${suffix}`]) != null ? n[`energy${suffix}`] / 4.184 : null);
+    const servingSize = data.product.serving_size;
+    const useServing = !!servingSize && kcal("_serving") != null;
+    const suffix = useServing ? "_serving" : "_100g";
+
     res.status(200).json({
       label: data.product.product_name || data.product.generic_name || `Item ${code}`,
-      serving: "100g",
-      calories: Math.round(n["energy-kcal_100g"] || 0),
-      protein: Math.round(n["proteins_100g"] || 0),
-      carbs: Math.round(n["carbohydrates_100g"] || 0),
-      fat: Math.round(n["fat_100g"] || 0),
+      serving: useServing ? servingSize : "100g",
+      calories: Math.round(kcal(suffix) || 0),
+      protein: Math.round(num(n[`proteins${suffix}`]) || 0),
+      carbs: Math.round(num(n[`carbohydrates${suffix}`]) || 0),
+      fat: Math.round(num(n[`fat${suffix}`]) || 0),
     });
   } catch (err) {
     res.status(502).json({ error: err.message || "Barcode lookup failed" });
