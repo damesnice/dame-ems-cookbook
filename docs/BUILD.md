@@ -584,3 +584,74 @@ missing entry can be corrected by hand rather than trusted blindly.
 scan a packaged snack (not a raw 100g-labeled item), and confirm the
 confirm-add panel shows a serving like "1 bar (24g)" with numbers that
 match the actual nutrition label, not numbers ~4x too high.
+
+## 2026-08-17 — Recipe search, and a shopping list generated from the meal plan
+
+**What:** A search box on the shelf (name + ingredients), and a "🛒
+Shopping list" button per week in the meal plan that aggregates everything
+that week's planned meals need.
+
+**Why:** Asked Damon for upgrade ideas; he picked these two off the list.
+Both were natural next steps because the underlying data (recipes, pantry
+categories, the meal plan) already existed — this connects pieces that were
+sitting side by side rather than adding a new concept.
+
+**Recipe search** — `Shelf` now filters by a text query against the recipe
+name *and* its ingredient names, combined with the existing category
+filter (so "what can I make with X" works, not just "find recipe named
+X"):
+
+```js
+// src/App.jsx — Shelf
+const shown = families.filter((f) => {
+  if (filter !== "All" && f.category !== filter) return false;
+  if (!q) return true;
+  if (f.name.toLowerCase().includes(q)) return true;
+  return latestKeeper(f).ingredients.some((i) => i.name.toLowerCase().includes(q));
+});
+```
+
+**Shopping list — the scope and math questions, asked and answered before
+building:** three real design calls here, each confirmed with Damon first
+rather than guessed: generate one week at a time (not a custom date-range
+picker); checked-off items stay checked and sync across devices (useful
+if two people split a shopping trip); and amounts show as a hint per
+source rather than being summed across different recipes or units (adding
+"2 cups" + "300g" of the same ingredient would be silently wrong).
+
+**How a meal plan item becomes a shopping-list line:** if the item's name
+matches a shelf recipe, it expands into that recipe's actual ingredient
+rows; if it matches a pantry item (or matches nothing — a freeform typed
+item), it's its own single line. Grouped by ingredient + unit + source
+recipe, so the *only* math that happens is multiplying one recipe's fixed
+ingredient amount by how many days that meal is actually planned that week
+— never adding two different things together:
+
+```js
+// src/App.jsx — buildShoppingList
+// key = `r:${recipeName}|${ingredientName}|${unit}` for recipe ingredients,
+// `p:${itemName}` for pantry/freeform items. Repeats increment `count`;
+// display multiplies amount * count, never sums across differing keys.
+```
+
+This also means a meal linked across the whole week (from the "eat this
+all week" feature) correctly shows up ×7 rather than needing its own
+special case — `buildShoppingList` walks every day via `getEffectiveSlot`,
+the same link-aware resolver day totals and fill-counts already use.
+
+Lines are grouped into sections using `pantryCategoryFor()` — the same
+category matching the Pantry tab uses — so the list reads in roughly
+grocery-aisle order instead of a flat alphabetical dump.
+
+**Data model:** `week.shoppingChecked = { [itemKey]: true }`, persisted and
+synced through the existing meal plan storage — no new API endpoint
+needed, this rides the same `/api/mealplan` PUT as everything else in the
+week.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+search the shelf for an ingredient you know is only in one recipe, confirm
+it surfaces that recipe even though the query doesn't match its name; open
+a planned week's shopping list, check a few items on one device, reload on
+another and confirm the checks persisted; link a meal across the whole
+week and confirm its ingredients show a ×7 multiplier in the list instead
+of one line per day.

@@ -551,7 +551,14 @@ function BarcodeScannerModal({ onDetected, onClose }) {
 function Shelf({ families, onOpen, onNew, onRecategorize }) {
   const [filter, setFilter] = useState("All");
   const [dragOverCategory, setDragOverCategory] = useState(null);
-  const shown = filter === "All" ? families : families.filter((f) => f.category === filter);
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = families.filter((f) => {
+    if (filter !== "All" && f.category !== filter) return false;
+    if (!q) return true;
+    if (f.name.toLowerCase().includes(q)) return true;
+    return latestKeeper(f).ingredients.some((i) => i.name.toLowerCase().includes(q));
+  });
 
   if (families.length === 0) {
     return (
@@ -569,6 +576,13 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
 
   return (
     <div>
+      <input
+        style={{ ...inputStyle, maxWidth: 320, marginBottom: 16 }}
+        placeholder="Search recipes or ingredients…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 22 }}>
         {["All", ...CATEGORIES].map((c) => (
           <button
@@ -606,7 +620,7 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
 
       {shown.length === 0 ? (
         <p style={{ fontFamily: "'Inter', sans-serif", color: COLORS.inkSoft, fontSize: 14 }}>
-          Nothing on the shelf in this category yet.
+          {q ? "No recipes match that search." : "Nothing on the shelf in this category yet."}
         </p>
       ) : (
         <div
@@ -1259,6 +1273,66 @@ function weekFillCount(week) {
   return n;
 }
 
+function pantryCategoryFor(itemName, pantry) {
+  const lower = itemName.toLowerCase();
+  const cat = (pantry?.categories || []).find((c) => c.items.some((it) => it.toLowerCase() === lower));
+  return cat?.name || "Other";
+}
+
+// Builds one week's shopping list from the meal plan: a recipe item expands
+// into its own ingredients (grouped per ingredient+unit+recipe, so amounts
+// only ever multiply by repeat count — never summed across different units
+// or different recipes); a pantry/freeform item is its own line. Follows
+// "eat this all week" links via getEffectiveSlot, so a linked meal counts
+// once per day it actually covers.
+function buildShoppingList(week, families, pantry) {
+  const groups = new Map();
+  WEEK_DAYS.forEach((day) => {
+    MEAL_SLOTS.forEach((slot) => {
+      const { value } = getEffectiveSlot(week, day, slot);
+      value.items.forEach((itemName) => {
+        const recipe = families.find((f) => f.name.toLowerCase() === itemName.toLowerCase());
+        if (recipe) {
+          const gen = latestKeeper(recipe);
+          gen.ingredients.forEach((ing) => {
+            if (!ing.name) return;
+            const key = `r:${recipe.name}|${ing.name}|${ing.unit}`;
+            const existing = groups.get(key);
+            if (existing) existing.count += 1;
+            else {
+              groups.set(key, {
+                key,
+                name: ing.name,
+                amount: ing.amount || null,
+                unit: ing.unit,
+                source: recipe.name,
+                count: 1,
+                category: pantryCategoryFor(ing.name, pantry),
+              });
+            }
+          });
+          return;
+        }
+        const key = `p:${itemName.toLowerCase()}`;
+        const existing = groups.get(key);
+        if (existing) existing.count += 1;
+        else {
+          groups.set(key, {
+            key,
+            name: itemName,
+            amount: null,
+            unit: null,
+            source: null,
+            count: 1,
+            category: pantryCategoryFor(itemName, pantry),
+          });
+        }
+      });
+    });
+  });
+  return [...groups.values()];
+}
+
 async function suggestWeek(recipes) {
   const res = await fetch("/api/suggest-week", {
     method: "POST",
@@ -1570,16 +1644,79 @@ function DayCard({ day, week, pantry, families, macroIndex, onChange, onRepeatWe
   );
 }
 
-function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError }) {
+function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle, onClear, onClose }) {
+  const items = buildShoppingList(week, families, pantry);
+  const byCategory = {};
+  items.forEach((it) => {
+    (byCategory[it.category] ||= []).push(it);
+  });
+  const categories = Object.keys(byCategory).sort();
+  const remaining = items.filter((it) => !checked[it.key]).length;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(36,41,31,0.85)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: COLORS.paper, borderRadius: 6, padding: 20, maxWidth: 480, width: "100%", maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <span style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 500, color: COLORS.ink }}>
+            Shopping list — Week {weekNum}
+          </span>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 20, cursor: "pointer", lineHeight: 1, padding: 0 }}>
+            ×
+          </button>
+        </div>
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4, marginBottom: 16 }}>
+          {items.length === 0 ? "Nothing planned yet this week." : `${remaining} of ${items.length} left to grab.`}
+        </p>
+
+        {categories.map((cat) => (
+          <div key={cat} style={{ marginBottom: 16 }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.plum, marginBottom: 6, paddingBottom: 4, borderBottom: `1px solid ${COLORS.line}` }}>
+              {cat}
+            </div>
+            {byCategory[cat].map((it) => {
+              const isChecked = !!checked[it.key];
+              return (
+                <label
+                  key={it.key}
+                  style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: isChecked ? COLORS.inkSoft : COLORS.ink, textDecoration: isChecked ? "line-through" : "none", cursor: "pointer" }}
+                >
+                  <input type="checkbox" checked={isChecked} onChange={() => onToggle(it.key)} style={{ marginTop: 3 }} />
+                  <span>
+                    {it.name}
+                    {it.amount ? ` — ${roundAmt(it.amount * it.count)}${it.unit ? " " + it.unit : ""}` : it.count > 1 ? ` ×${it.count}` : ""}
+                    {it.source && <span style={{ color: COLORS.inkSoft, fontStyle: "italic" }}> ({it.source})</span>}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ))}
+
+        {items.length > 0 && (
+          <Button variant="ghost" onClick={onClear} style={{ marginTop: 8 }}>
+            Clear all checks
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError, onToggleShoppingItem, onClearShoppingChecks }) {
+  const [showShoppingList, setShowShoppingList] = useState(false);
+
   return (
     <div style={{ padding: "16px 18px 20px", borderTop: `1px solid ${COLORS.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: 0 }}>
           Add a main and any sides for each slot — browse your recipes and pantry, or just type. A photo&rsquo;s optional.
         </p>
-        <Button variant="ghost" onClick={onShuffle} disabled={shuffleLoading}>
-          {shuffleLoading ? "Shuffling…" : "🔀 Shuffle in a week"}
-        </Button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button variant="ghost" onClick={() => setShowShoppingList(true)}>🛒 Shopping list</Button>
+          <Button variant="ghost" onClick={onShuffle} disabled={shuffleLoading}>
+            {shuffleLoading ? "Shuffling…" : "🔀 Shuffle in a week"}
+          </Button>
+        </div>
       </div>
       {shuffleError && (
         <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{shuffleError}</div>
@@ -1599,11 +1736,24 @@ function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, 
           />
         ))}
       </div>
+
+      {showShoppingList && (
+        <ShoppingListModal
+          weekNum={weekNum}
+          week={week}
+          families={families}
+          pantry={pantry}
+          checked={week?.shoppingChecked || {}}
+          onToggle={(key) => onToggleShoppingItem(weekNum, key)}
+          onClear={() => onClearShoppingChecks(weekNum)}
+          onClose={() => setShowShoppingList(false)}
+        />
+      )}
     </div>
   );
 }
 
-function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffleWeek }) {
+function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffleWeek, onToggleShoppingItem, onClearShoppingChecks }) {
   const [expanded, setExpanded] = useState(null);
   const [shuffleLoadingWeek, setShuffleLoadingWeek] = useState(null);
   const [shuffleError, setShuffleError] = useState("");
@@ -1684,6 +1834,8 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
                   onShuffle={() => handleShuffle(weekNum)}
                   shuffleLoading={shuffleLoadingWeek === weekNum}
                   shuffleError={expanded === weekNum ? shuffleError : ""}
+                  onToggleShoppingItem={onToggleShoppingItem}
+                  onClearShoppingChecks={onClearShoppingChecks}
                 />
               )}
             </div>
@@ -2192,6 +2344,23 @@ export default function App() {
     persistMealPlan({ ...mealPlan, weeks });
   }
 
+  function handleToggleShoppingItem(weekNum, itemKey) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {}, repeats: {}, shoppingChecked: {} };
+    const shoppingChecked = { ...(week.shoppingChecked || {}) };
+    if (shoppingChecked[itemKey]) delete shoppingChecked[itemKey];
+    else shoppingChecked[itemKey] = true;
+    weeks[weekNum] = { ...week, shoppingChecked };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
+  function handleClearShoppingChecks(weekNum) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {}, repeats: {}, shoppingChecked: {} };
+    weeks[weekNum] = { ...week, shoppingChecked: {} };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
   async function handleShuffleWeek(weekNum, recipes) {
     const suggestion = await suggestWeek(recipes);
     const weeks = { ...mealPlan.weeks };
@@ -2332,6 +2501,8 @@ export default function App() {
               onRepeatSlotWeek={handleRepeatSlotWeek}
               onUnrepeatSlotWeek={handleUnrepeatSlotWeek}
               onShuffleWeek={handleShuffleWeek}
+              onToggleShoppingItem={handleToggleShoppingItem}
+              onClearShoppingChecks={handleClearShoppingChecks}
             />
           )}
 
