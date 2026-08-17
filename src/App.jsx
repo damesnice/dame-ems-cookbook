@@ -1330,6 +1330,29 @@ function buildShoppingList(week, families, pantry) {
       });
     });
   });
+
+  // Items added by hand from the pantry (not tied to a planned meal) merge
+  // into the same list — same key scheme, so adding "asparagus" that's
+  // already on the list from a recipe just marks it removable rather than
+  // duplicating the line.
+  (week?.shoppingExtras || []).forEach((itemName) => {
+    const key = `p:${itemName.toLowerCase()}`;
+    const existing = groups.get(key);
+    if (existing) existing.isExtra = true;
+    else {
+      groups.set(key, {
+        key,
+        name: itemName,
+        amount: null,
+        unit: null,
+        source: null,
+        count: 1,
+        category: pantryCategoryFor(itemName, pantry),
+        isExtra: true,
+      });
+    }
+  });
+
   return [...groups.values()];
 }
 
@@ -1644,7 +1667,8 @@ function DayCard({ day, week, pantry, families, macroIndex, onChange, onRepeatWe
   );
 }
 
-function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle, onClear, onClose }) {
+function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle, onClear, onAddExtra, onRemoveExtra, onClose }) {
+  const [showAdd, setShowAdd] = useState(false);
   const items = buildShoppingList(week, families, pantry);
   const byCategory = {};
   items.forEach((it) => {
@@ -1664,9 +1688,14 @@ function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle,
             ×
           </button>
         </div>
-        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4, marginBottom: 16 }}>
+        <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, marginTop: 4, marginBottom: 12 }}>
           {items.length === 0 ? "Nothing planned yet this week." : `${remaining} of ${items.length} left to grab.`}
         </p>
+
+        <Button variant="ghost" onClick={() => setShowAdd((s) => !s)} style={{ marginBottom: 12 }}>
+          {showAdd ? "Hide pantry" : "+ add from pantry"}
+        </Button>
+        {showAdd && <IngredientPicker pantry={pantry} onPick={onAddExtra} />}
 
         {categories.map((cat) => (
           <div key={cat} style={{ marginBottom: 16 }}>
@@ -1676,17 +1705,27 @@ function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle,
             {byCategory[cat].map((it) => {
               const isChecked = !!checked[it.key];
               return (
-                <label
-                  key={it.key}
-                  style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: isChecked ? COLORS.inkSoft : COLORS.ink, textDecoration: isChecked ? "line-through" : "none", cursor: "pointer" }}
-                >
-                  <input type="checkbox" checked={isChecked} onChange={() => onToggle(it.key)} style={{ marginTop: 3 }} />
-                  <span>
-                    {it.name}
-                    {it.amount ? ` — ${roundAmt(it.amount * it.count)}${it.unit ? " " + it.unit : ""}` : it.count > 1 ? ` ×${it.count}` : ""}
-                    {it.source && <span style={{ color: COLORS.inkSoft, fontStyle: "italic" }}> ({it.source})</span>}
-                  </span>
-                </label>
+                <div key={it.key} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 0" }}>
+                  <label
+                    style={{ display: "flex", alignItems: "flex-start", gap: 8, flex: 1, fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: isChecked ? COLORS.inkSoft : COLORS.ink, textDecoration: isChecked ? "line-through" : "none", cursor: "pointer" }}
+                  >
+                    <input type="checkbox" checked={isChecked} onChange={() => onToggle(it.key)} style={{ marginTop: 3 }} />
+                    <span>
+                      {it.name}
+                      {it.amount ? ` — ${roundAmt(it.amount * it.count)}${it.unit ? " " + it.unit : ""}` : it.count > 1 ? ` ×${it.count}` : ""}
+                      {it.source && <span style={{ color: COLORS.inkSoft, fontStyle: "italic" }}> ({it.source})</span>}
+                    </span>
+                  </label>
+                  {it.isExtra && (
+                    <button
+                      onClick={() => onRemoveExtra(it.name)}
+                      title="Remove from list"
+                      style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -1702,7 +1741,7 @@ function ShoppingListModal({ weekNum, week, families, pantry, checked, onToggle,
   );
 }
 
-function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError, onToggleShoppingItem, onClearShoppingChecks }) {
+function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffle, shuffleLoading, shuffleError, onToggleShoppingItem, onClearShoppingChecks, onAddShoppingExtra, onRemoveShoppingExtra }) {
   const [showShoppingList, setShowShoppingList] = useState(false);
 
   return (
@@ -1746,6 +1785,8 @@ function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, 
           checked={week?.shoppingChecked || {}}
           onToggle={(key) => onToggleShoppingItem(weekNum, key)}
           onClear={() => onClearShoppingChecks(weekNum)}
+          onAddExtra={(name) => onAddShoppingExtra(weekNum, name)}
+          onRemoveExtra={(name) => onRemoveShoppingExtra(weekNum, name)}
           onClose={() => setShowShoppingList(false)}
         />
       )}
@@ -1753,7 +1794,7 @@ function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, 
   );
 }
 
-function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffleWeek, onToggleShoppingItem, onClearShoppingChecks }) {
+function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, onUnrepeatSlotWeek, onShuffleWeek, onToggleShoppingItem, onClearShoppingChecks, onAddShoppingExtra, onRemoveShoppingExtra }) {
   const [expanded, setExpanded] = useState(null);
   const [shuffleLoadingWeek, setShuffleLoadingWeek] = useState(null);
   const [shuffleError, setShuffleError] = useState("");
@@ -1836,6 +1877,8 @@ function MealPlan({ mealPlan, families, pantry, onUpdateSlot, onRepeatSlotWeek, 
                   shuffleError={expanded === weekNum ? shuffleError : ""}
                   onToggleShoppingItem={onToggleShoppingItem}
                   onClearShoppingChecks={onClearShoppingChecks}
+                  onAddShoppingExtra={onAddShoppingExtra}
+                  onRemoveShoppingExtra={onRemoveShoppingExtra}
                 />
               )}
             </div>
@@ -2361,6 +2404,23 @@ export default function App() {
     persistMealPlan({ ...mealPlan, weeks });
   }
 
+  function handleAddShoppingExtra(weekNum, itemName) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {}, repeats: {}, shoppingChecked: {}, shoppingExtras: [] };
+    const extras = week.shoppingExtras || [];
+    if (extras.some((n) => n.toLowerCase() === itemName.toLowerCase())) return;
+    weeks[weekNum] = { ...week, shoppingExtras: [...extras, itemName] };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
+  function handleRemoveShoppingExtra(weekNum, itemName) {
+    const weeks = { ...mealPlan.weeks };
+    const week = weeks[weekNum] || { days: {}, repeats: {}, shoppingChecked: {}, shoppingExtras: [] };
+    const extras = (week.shoppingExtras || []).filter((n) => n.toLowerCase() !== itemName.toLowerCase());
+    weeks[weekNum] = { ...week, shoppingExtras: extras };
+    persistMealPlan({ ...mealPlan, weeks });
+  }
+
   async function handleShuffleWeek(weekNum, recipes) {
     const suggestion = await suggestWeek(recipes);
     const weeks = { ...mealPlan.weeks };
@@ -2503,6 +2563,8 @@ export default function App() {
               onShuffleWeek={handleShuffleWeek}
               onToggleShoppingItem={handleToggleShoppingItem}
               onClearShoppingChecks={handleClearShoppingChecks}
+              onAddShoppingExtra={handleAddShoppingExtra}
+              onRemoveShoppingExtra={handleRemoveShoppingExtra}
             />
           )}
 

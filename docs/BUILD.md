@@ -655,3 +655,52 @@ a planned week's shopping list, check a few items on one device, reload on
 another and confirm the checks persisted; link a meal across the whole
 week and confirm its ingredients show a ×7 multiplier in the list instead
 of one line per day.
+
+## 2026-08-17 — Shopping list gets pantry access + search
+
+**What:** A "+ add from pantry" toggle inside the shopping list modal that
+reveals the same category-pills-and-search picker used everywhere else in
+the app, so items can be added by hand — not just ones the meal plan
+already implies.
+
+**Why:** Damon asked for the shopping list to have pantry access and a
+search function. Rather than build a new picker, this reuses
+`IngredientPicker` as-is — it already does exactly "browse the pantry by
+category, or search across all of it" (same component New recipe and Log a
+cook use), so this was wiring, not new UI:
+
+```jsx
+// src/App.jsx — ShoppingListModal
+{showAdd && <IngredientPicker pantry={pantry} onPick={onAddExtra} />}
+```
+
+**Merging manual additions into the auto-generated list:** `buildShoppingList`
+already grouped meal-plan items by a `p:${name}` key for anything that
+isn't a recipe; manually-added pantry items reuse that exact key scheme, so
+adding "asparagus" when it's already on the list (because a recipe that
+week uses it) just marks the existing line removable instead of creating a
+duplicate:
+
+```js
+// src/App.jsx — buildShoppingList, extras pass
+(week?.shoppingExtras || []).forEach((itemName) => {
+  const key = `p:${itemName.toLowerCase()}`;
+  const existing = groups.get(key);
+  if (existing) existing.isExtra = true;
+  else groups.set(key, { key, name: itemName, /* ... */ isExtra: true });
+});
+```
+
+Only lines with `isExtra` get a remove (×) control — auto-generated lines
+stay un-removable on purpose, since deleting one wouldn't un-plan the meal
+that put it there; unchecking is the right action for those.
+
+**Data model:** `week.shoppingExtras = ["Asparagus", ...]`, alongside the
+existing `shoppingChecked` map, synced through the same `/api/mealplan`
+storage — still no new endpoint.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Once deployed:
+open a week's shopping list, tap "+ add from pantry," search for and add
+an item not otherwise planned that week, confirm it appears with a
+removable ×; add an item that's already on the list from a recipe and
+confirm it doesn't duplicate, just becomes removable.
