@@ -704,3 +704,96 @@ open a week's shopping list, tap "+ add from pantry," search for and add
 an item not otherwise planned that week, confirm it appears with a
 removable ×; add an item that's already on the list from a recipe and
 confirm it doesn't duplicate, just becomes removable.
+
+## 2026-08-18 — Recipe photos, edit, delete; chased down Emma's misaligned layout
+
+**What:** Damon reported four things from Emma: no way to attach a photo to
+a recipe, no way to edit or delete one after saving, wanting emoji in
+titles/notes, and her copy of a recipe rendering visibly broken — two
+narrow columns crammed together with an internal scrollbar, cutting words
+mid-sentence.
+
+**Emoji — already worked, no code change.** Name/notes/step fields are
+plain `<input>`/`<textarea>` bound straight to React state; nothing
+sanitizes non-ASCII. Confirmed against the live data — `🥩 Cajun Tomato
+Beef` and `🍛 Cajun Tomato Beef & Curry Rice` were already on the shelf
+with emoji in the title. Added an emoji to the Name field's placeholder
+("Sunday ragù 🍝") as the only change, so the option is visible.
+
+**The layout bug: stale install, not a live bug.** Loaded Emma's exact
+recipe (Strawberry Cheesecake Rice Cake) against the shared Redis store
+and it rendered correctly — Ingredients then Steps, stacked. The
+[[2026-08-16]] entry above explains why: `RecipeDetail` used to lay
+Ingredients and Steps out in a `260px 1fr` grid and was changed to a
+single stacked column that day. Emma opens the cookbook from a home-screen
+icon (standalone PWA), which on iOS can sit on an old cached build for a
+long time — it only checks for updates on its own schedule, and a
+backgrounded-then-reopened app often never triggers that check. Her
+screenshot is that old `260px 1fr` grid, squeezed onto a phone screen.
+Also explains the mid-sentence step breaks in her screenshot — unrelated
+data issue, not a rendering one: that recipe's steps were pasted in with
+existing line breaks, and steps are split on `\n`, so each wrapped line of
+the original text became its own numbered step.
+
+**Fix:** `src/main.jsx` now explicitly drives the service worker instead of
+relying on the silently-injected default registration:
+
+```js
+import { registerSW } from "virtual:pwa-register";
+
+registerSW({
+  immediate: true,
+  onRegisteredSW(_url, registration) {
+    if (!registration) return;
+    setInterval(() => registration.update(), 60 * 60 * 1000);
+  },
+});
+```
+
+`registerType: "autoUpdate"` (already set in `vite.config.js`) makes any
+found update activate and reload automatically — the missing piece was
+ever *checking* while the app just sits open. This polls hourly instead of
+only on load. Emma still needs to fully close and reopen the app once to
+pick up this fix itself (it can't make itself run sooner).
+
+**Photos:** generations gained an `image` field — a small JPEG data URL
+via the existing `resizeImageFile` helper (same one meal-plan slot photos
+already used), so nothing full-resolution lands in the shared Redis blob.
+Pulled the add/remove-photo control out of `MealItemSlot` into a shared
+`PhotoField` component and wired it into all three places a recipe's
+photo can be set: `NewCulture` (create), `LogCook` (each new version can
+carry its own photo, defaulting to the previous one), and the new edit
+form. `RecipeDetail` shows the photo full-width under the title if set,
+and `Shelf` cards show it as a thumbnail.
+
+**Edit and delete (`src/App.jsx`):** `RecipeDetail` gained "edit" and
+"delete" links next to the star rating. Edit opens a new
+`EditRecipeForm` — deliberately *not* `LogCook`: it mutates the
+generation being viewed in place (plus the family's name/category, which
+live outside any one generation) rather than branching a new version, for
+fixing typos and mistakes rather than recording a real change to the
+recipe:
+
+```js
+function handleEditRecipe(familyId, genId, updates) {
+  const { name, category, ...genUpdates } = updates;
+  const next = families.map((f) => {
+    if (f.id !== familyId) return f;
+    return { ...f, name, category, generations: f.generations.map((g) => (g.id === genId ? { ...g, ...genUpdates } : g)) };
+  });
+  persist(next);
+}
+```
+
+Delete removes the whole family (all versions) after a
+`window.confirm`, since there's no per-generation delete — the
+family/generation model doesn't have a concept of a "current" version to
+delete down to.
+
+**Verify it:** `npm run lint && npm run build` — both clean. Tested live
+against the shared cookbook (not a scratch copy) by creating a throwaway
+recipe with a photo, confirming it showed on the shelf card and detail
+view, editing its name in place, then removing it again directly through
+`/api/families` (the delete button itself opens a native `confirm()`
+dialog, which browser automation can't click through safely) — verified
+the three real recipes were untouched throughout.

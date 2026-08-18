@@ -672,6 +672,13 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
                 >
                   {f.category}
                 </div>
+                {gen.image && (
+                  <img
+                    src={gen.image}
+                    alt=""
+                    style={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 3, marginBottom: 10, display: "block" }}
+                  />
+                )}
                 <div style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 500, color: COLORS.ink, marginBottom: 8 }}>
                   {f.name}
                 </div>
@@ -801,6 +808,7 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
   const [steps, setSteps] = useState("");
   const [notes, setNotes] = useState("");
   const [macroFields, setMacroFields] = useState(emptyMacroFields());
+  const [image, setImage] = useState(null);
 
   function updateIng(id, field, val) {
     setIngredients((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
@@ -842,6 +850,7 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
           steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
           notes: notes.trim(),
           macros: fieldsToMacros(macroFields),
+          image,
           rating: 0,
           isKeeper: true,
           cookedDate: todayISO(),
@@ -859,7 +868,11 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
       </p>
 
       <Field label="Name">
-        <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sunday ragù" />
+        <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sunday ragù 🍝" />
+      </Field>
+
+      <Field label="Photo (optional)">
+        <PhotoField image={image} onChange={setImage} />
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -903,7 +916,7 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
       </Field>
 
       <Field label="Notes (optional)">
-        <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this came from, what makes it work." />
+        <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this came from, what makes it work. Emoji welcome 🍰" />
       </Field>
 
       <Field label="Macros per serving (optional)">
@@ -920,15 +933,39 @@ function NewCulture({ onCreate, onCancel, pantry, families }) {
 
 // ---------- Recipe detail ----------
 
-function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen }) {
+function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen, onEditRecipe, onDeleteRecipe, pantry, families }) {
   const gen = findGen(family, genId) || latestKeeper(family);
   const [servings, setServings] = useState(gen.servings || 4);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     setServings(gen.servings || 4);
+    setEditing(false);
   }, [gen.id, gen.servings]);
 
   const mult = servings / (gen.servings || 1);
+
+  if (editing) {
+    return (
+      <EditRecipeForm
+        family={family}
+        gen={gen}
+        pantry={pantry}
+        families={families}
+        onSave={(updates) => {
+          onEditRecipe(gen.id, updates);
+          setEditing(false);
+        }}
+        onCancel={() => setEditing(false)}
+      />
+    );
+  }
+
+  function handleDelete() {
+    if (window.confirm(`Delete "${family.name}" and all ${family.generations.length > 1 ? `${family.generations.length} of its versions` : "its history"}? This can't be undone.`)) {
+      onDeleteRecipe();
+    }
+  }
 
   return (
     <div>
@@ -943,8 +980,26 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
           </div>
           <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 30, fontWeight: 500, margin: 0 }}>{family.name}</h2>
         </div>
-        <Stars value={gen.rating || 0} onChange={(r) => onRateGen(gen.id, r)} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+          <Stars value={gen.rating || 0} onChange={(r) => onRateGen(gen.id, r)} />
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={() => setEditing(true)} style={{ border: "none", background: "transparent", color: COLORS.plum, cursor: "pointer", fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, padding: 0 }}>
+              edit
+            </button>
+            <button onClick={handleDelete} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontFamily: "'Inter', sans-serif", fontSize: 11, padding: 0 }}>
+              delete
+            </button>
+          </div>
+        </div>
       </div>
+
+      {gen.image && (
+        <img
+          src={gen.image}
+          alt=""
+          style={{ width: "100%", maxWidth: 420, maxHeight: 280, objectFit: "cover", borderRadius: 4, border: `1px solid ${COLORS.line}`, marginBottom: 18, display: "block" }}
+        />
+      )}
 
       {family.generations.length > 1 && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 20 }}>
@@ -1020,6 +1075,121 @@ function RecipeDetail({ family, genId, onViewTree, onLogCook, onBack, onRateGen 
   );
 }
 
+// Edits a recipe's current version in place — unlike "Log a cook", this
+// doesn't create a new generation, it corrects the one being viewed
+// (typos, a missed ingredient, a rename). Also covers the family-level
+// name and category, which live outside any one generation.
+function EditRecipeForm({ family, gen, onSave, onCancel, pantry, families }) {
+  const [name, setName] = useState(family.name);
+  const [category, setCategory] = useState(family.category);
+  const [servings, setServings] = useState(gen.servings || 4);
+  const [ingredients, setIngredients] = useState(gen.ingredients.map((i) => ({ ...i, id: uid() })));
+  const [steps, setSteps] = useState(gen.steps.join("\n"));
+  const [notes, setNotes] = useState(gen.notes || "");
+  const [macroFields, setMacroFields] = useState(macrosToFields(gen.macros));
+  const [image, setImage] = useState(gen.image || null);
+
+  function updateIng(id, field, val) {
+    setIngredients((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
+  }
+  function addIng() {
+    setIngredients((prev) => [...prev, { id: uid(), name: "", amount: "", unit: "" }]);
+  }
+  function removeIng(id) {
+    setIngredients((prev) => prev.filter((i) => i.id !== id));
+  }
+  function pickIngredient(itemName) {
+    setIngredients((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && !last.name.trim() && !last.amount && !last.unit) {
+        return prev.map((i, idx) => (idx === prev.length - 1 ? { ...i, name: itemName } : i));
+      }
+      return [...prev, { id: uid(), name: itemName, amount: "", unit: "" }];
+    });
+  }
+
+  function submit() {
+    if (!name.trim()) return;
+    onSave({
+      name: name.trim(),
+      category,
+      servings: parseInt(servings, 10) || 4,
+      ingredients: ingredients.filter((i) => i.name.trim()).map((i) => ({ ...i, amount: parseFloat(i.amount) || 0 })),
+      steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
+      notes: notes.trim(),
+      macros: fieldsToMacros(macroFields),
+      image,
+    });
+  }
+
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h2 style={{ fontFamily: "'Fraunces', serif", fontSize: 24, fontWeight: 500, marginBottom: 4 }}>Edit recipe</h2>
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 22 }}>
+        Editing <em>{gen.label}</em> — corrections only. To keep the old version around too, cancel and use &ldquo;Log a cook&rdquo; instead.
+      </p>
+
+      <Field label="Name">
+        <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+
+      <Field label="Photo (optional)">
+        <PhotoField image={image} onChange={setImage} />
+      </Field>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="Category">
+          <select style={inputStyle} value={category} onChange={(e) => setCategory(e.target.value)}>
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Serves">
+          <input type="number" min="1" style={inputStyle} value={servings} onChange={(e) => setServings(e.target.value)} />
+        </Field>
+      </div>
+
+      <Field label="Ingredients">
+        <IngredientPicker pantry={pantry} onPick={pickIngredient} />
+        <datalist id="pantry-ingredient-names">
+          {combinedIngredientNames(pantry, families).map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
+        {ingredients.map((ing) => (
+          <div key={ing.id} style={{ display: "grid", gridTemplateColumns: "1fr 70px 70px 28px", gap: 6, marginBottom: 6 }}>
+            <input style={inputStyle} list="pantry-ingredient-names" value={ing.name} onChange={(e) => updateIng(ing.id, "name", e.target.value)} />
+            <input style={inputStyle} value={ing.amount} onChange={(e) => updateIng(ing.id, "amount", e.target.value)} />
+            <input style={inputStyle} value={ing.unit} onChange={(e) => updateIng(ing.id, "unit", e.target.value)} />
+            <button onClick={() => removeIng(ing.id)} style={{ border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontSize: 16 }}>×</button>
+          </div>
+        ))}
+        <button onClick={addIng} style={{ border: "none", background: "transparent", color: COLORS.plum, cursor: "pointer", fontSize: 12, fontFamily: "'Inter', sans-serif", fontWeight: 600, padding: "4px 0" }}>
+          + add ingredient
+        </button>
+      </Field>
+
+      <Field label="Steps (one per line)">
+        <textarea style={{ ...inputStyle, minHeight: 110, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={steps} onChange={(e) => setSteps(e.target.value)} />
+      </Field>
+
+      <Field label="Notes (optional)">
+        <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "'Inter', sans-serif" }} value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </Field>
+
+      <Field label="Macros per serving (optional)">
+        <MacroFields fields={macroFields} onChange={setMacroFields} />
+      </Field>
+
+      <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+        <Button onClick={submit}>Save changes</Button>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Log a cook ----------
 
 function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
@@ -1032,6 +1202,7 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
   const [notes, setNotes] = useState("");
   const [isKeeper, setIsKeeper] = useState(true);
   const [macroFields, setMacroFields] = useState(macrosToFields(base.macros));
+  const [image, setImage] = useState(base.image || null);
 
   function updateIng(id, field, val) {
     setIngredients((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
@@ -1063,6 +1234,7 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
       steps: steps.split("\n").map((s) => stripLeadingNumber(s.trim())).filter(Boolean),
       notes: notes.trim(),
       macros: fieldsToMacros(macroFields),
+      image,
       rating,
       isKeeper,
       cookedDate: todayISO(),
@@ -1078,7 +1250,11 @@ function LogCook({ family, fromGenId, onSave, onCancel, pantry, families }) {
       </p>
 
       <Field label="What changed (this generation's name)">
-        <input style={inputStyle} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Doubled the garlic, less salt" />
+        <input style={inputStyle} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Doubled the garlic, less salt 🧄" />
+      </Field>
+
+      <Field label="Photo (optional)">
+        <PhotoField image={image} onChange={setImage} />
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -1390,6 +1566,50 @@ function resizeImageFile(file, maxDim = 480, quality = 0.72) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+// Shared "add/remove photo" control — used by the recipe form, editing a
+// recipe, and logging a cook. Always resizes through resizeImageFile so
+// nothing full-resolution ever lands in the shared Redis blob.
+function PhotoField({ image, onChange, size = 64 }) {
+  const [imgError, setImgError] = useState("");
+
+  async function handlePickImage(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImgError("");
+    try {
+      onChange(await resizeImageFile(file));
+    } catch (err) {
+      setImgError(err.message || "Couldn't attach that photo");
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {image ? (
+          <>
+            <img src={image} alt="" style={{ width: size, height: size, borderRadius: 4, objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              style={{ border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 12, fontFamily: "'Inter', sans-serif", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+            >
+              remove photo
+            </button>
+          </>
+        ) : (
+          <label style={{ fontSize: 12, fontFamily: "'Inter', sans-serif", fontWeight: 600, color: COLORS.plum, cursor: "pointer" }}>
+            📷 add photo
+            <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handlePickImage} />
+          </label>
+        )}
+      </div>
+      {imgError && <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>}
+    </div>
+  );
 }
 
 function pillStyle(active) {
@@ -2338,6 +2558,25 @@ export default function App() {
     persist(next);
   }
 
+  function handleEditRecipe(familyId, genId, updates) {
+    const { name, category, ...genUpdates } = updates;
+    const next = families.map((f) => {
+      if (f.id !== familyId) return f;
+      return {
+        ...f,
+        name,
+        category,
+        generations: f.generations.map((g) => (g.id === genId ? { ...g, ...genUpdates } : g)),
+      };
+    });
+    persist(next);
+  }
+
+  function handleDeleteRecipe(familyId) {
+    persist(families.filter((f) => f.id !== familyId));
+    setView({ screen: "shelf" });
+  }
+
   function persistMealPlan(next) {
     setMealPlan(next);
     cacheMealPlan(next);
@@ -2530,6 +2769,10 @@ export default function App() {
               onLogCook={(familyId, fromGenId) => setView({ screen: "log", familyId, fromGenId })}
               onBack={() => setView({ screen: "shelf" })}
               onRateGen={(genId, rating) => handleRateGen(activeFamily.id, genId, rating)}
+              onEditRecipe={(genId, updates) => handleEditRecipe(activeFamily.id, genId, updates)}
+              onDeleteRecipe={() => handleDeleteRecipe(activeFamily.id)}
+              pantry={pantry}
+              families={families}
             />
           )}
 
