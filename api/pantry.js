@@ -1,12 +1,14 @@
 import { Redis } from "@upstash/redis";
-import { isAuthed } from "./_auth.js";
+import { requireUser } from "./_auth.js";
 import { DEFAULT_PANTRY } from "./_default-pantry.js";
+import { appendAuditEntries, logBlobChange } from "./_audit.js";
 
 const redis = Redis.fromEnv();
 const KEY = "pantry";
 
 export default async function handler(req, res) {
-  if (!isAuthed(req)) {
+  const user = await requireUser(req);
+  if (!user) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }
@@ -23,7 +25,9 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Expected a pantry object with a categories array" });
       return;
     }
+    const before = (await redis.get(KEY)) || DEFAULT_PANTRY;
     await redis.set(KEY, pantry);
+    await appendAuditEntries("pantry", logBlobChange("pantry", before, pantry, user));
     res.status(200).json({ ok: true });
     return;
   }

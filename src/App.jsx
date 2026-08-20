@@ -1,17 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import Settings from "./Settings.jsx";
+import { COLORS, Tab, Button, Field, inputStyle } from "./ui.jsx";
+import SeasonalBackground, { getSeason } from "./SeasonalBackground.jsx";
 
-const COLORS = {
-  paper: "#EFE9D8",
-  paperDeep: "#E5DEC8",
-  ink: "#24291F",
-  inkSoft: "#5B5A4D",
-  plum: "#6B3557",
-  plumSoft: "#8A5473",
-  mustard: "#C79A3D",
-  moss: "#4C6B4C",
-  line: "#D2C9AE",
-  card: "#F7F3E6",
-};
+function currentSeason() {
+  if (import.meta.env.DEV) {
+    const override = new URLSearchParams(window.location.search).get("season");
+    if (["winter", "spring", "summer", "fall"].includes(override)) return override;
+  }
+  return getSeason();
+}
+
+// Fall gets a deliberate whole-app dark theme (not a browser dark-mode
+// override — this renders identically everywhere), applied by toggling
+// [data-theme] on <html>; the actual color values live as static CSS in
+// index.html so they're present from first paint, before React mounts.
+// Every other season stays on the light palette.
 
 const FONTS_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;1,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');`;
 
@@ -183,20 +187,48 @@ async function lookupBarcode(code) {
 
 async function checkSession() {
   const res = await fetch("/api/login");
-  if (!res.ok) return false;
+  if (!res.ok) return { authed: false, user: null };
   const data = await res.json();
-  return !!data.authed;
+  return { authed: !!data.authed, user: data.user || null };
 }
 
-async function login(username, password) {
+async function login(identifier, password) {
   const res = await fetch("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ identifier, password }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Couldn't log in");
-  return true;
+  return data; // { ok, mfaRequired, method, user? }
+}
+
+async function verifyMfaCode(code) {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Couldn't verify that code");
+  return data; // { ok, user }
+}
+
+async function passkeyLogin(identifier) {
+  const { startAuthentication } = await import("@simplewebauthn/browser");
+  const optRes = await fetch(`/api/passkey?identifier=${encodeURIComponent(identifier)}`);
+  const options = await optRes.json().catch(() => ({}));
+  if (!optRes.ok) throw new Error(options.error || "No passkey found for that account.");
+  const { userId, ...optionsJSON } = options;
+  const response = await startAuthentication({ optionsJSON });
+  const verifyRes = await fetch("/api/passkey", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, response }),
+  });
+  const data = await verifyRes.json().catch(() => ({}));
+  if (!verifyRes.ok) throw new Error(data.error || "Couldn't sign in with that passkey.");
+  return data; // { ok, user }
 }
 
 async function logout() {
@@ -204,85 +236,6 @@ async function logout() {
 }
 
 // ---------- shared UI bits ----------
-
-function Tab({ label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        fontFamily: "'Fraunces', serif",
-        fontSize: 15,
-        fontWeight: 500,
-        letterSpacing: "0.02em",
-        padding: "10px 18px 12px",
-        background: "transparent",
-        border: "none",
-        borderBottom: active ? `3px solid ${COLORS.plum}` : "3px solid transparent",
-        color: active ? COLORS.ink : COLORS.inkSoft,
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function Button({ children, onClick, variant = "primary", style, type = "button", disabled = false }) {
-  const base = {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: 13,
-    fontWeight: 600,
-    letterSpacing: "0.01em",
-    padding: "9px 16px",
-    borderRadius: 3,
-    cursor: disabled ? "default" : "pointer",
-    border: "1px solid " + COLORS.ink,
-    opacity: disabled ? 0.55 : 1,
-  };
-  const variants = {
-    primary: { background: COLORS.plum, color: "#F7F1EA", border: `1px solid ${COLORS.plum}` },
-    ghost: { background: "transparent", color: COLORS.ink, border: `1px solid ${COLORS.line}` },
-    danger: { background: "transparent", color: "#8C3B2E", border: "1px solid #8C3B2E" },
-  };
-  return (
-    <button type={type} onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant], ...style }}>
-      {children}
-    </button>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: "block", marginBottom: 14 }}>
-      <div
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: COLORS.inkSoft,
-          marginBottom: 6,
-        }}
-      >
-        {label}
-      </div>
-      {children}
-    </label>
-  );
-}
-
-const inputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontFamily: "'Inter', sans-serif",
-  fontSize: 14,
-  padding: "9px 10px",
-  border: `1px solid ${COLORS.line}`,
-  borderRadius: 3,
-  background: "#FFFDF8",
-  color: COLORS.ink,
-};
 
 function Stars({ value, onChange }) {
   return (
@@ -466,7 +419,7 @@ function MacroEditor({ itemName, macros, onSave, onCancel }) {
         </Button>
       </div>
       <MacroFields fields={fields} onChange={setFields} />
-      {error && <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 6 }}>{error}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <Button onClick={handleSave} style={{ fontSize: 11, padding: "5px 10px" }}>Save</Button>
         <Button variant="ghost" onClick={onCancel} style={{ fontSize: 11, padding: "5px 10px" }}>Cancel</Button>
@@ -536,7 +489,7 @@ function BarcodeScannerModal({ onDetected, onClose }) {
         </div>
         <div id={regionId} style={{ width: "100%", borderRadius: 4, overflow: "hidden" }} />
         {error && (
-          <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginTop: 10 }}>{error}</div>
+          <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginTop: 10 }}>{error}</div>
         )}
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: COLORS.inkSoft, marginTop: 10, marginBottom: 0 }}>
           Point your camera at a product&rsquo;s barcode.
@@ -609,7 +562,7 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
               borderRadius: 20,
               border: `1px solid ${filter === c || dragOverCategory === c ? COLORS.plum : COLORS.line}`,
               background: filter === c ? COLORS.plum : dragOverCategory === c ? COLORS.line : "transparent",
-              color: filter === c ? "#F7F1EA" : COLORS.inkSoft,
+              color: filter === c ? "var(--c-onAccent)" : COLORS.inkSoft,
               cursor: "pointer",
             }}
           >
@@ -760,7 +713,7 @@ function IngredientPicker({ pantry, onPick }) {
                 borderRadius: 20,
                 border: `1px solid ${activeCat === c.name ? COLORS.plum : COLORS.line}`,
                 background: activeCat === c.name ? COLORS.plum : "transparent",
-                color: activeCat === c.name ? "#F7F1EA" : COLORS.inkSoft,
+                color: activeCat === c.name ? "var(--c-onAccent)" : COLORS.inkSoft,
                 cursor: "pointer",
               }}
             >
@@ -784,7 +737,7 @@ function IngredientPicker({ pantry, onPick }) {
                 padding: "5px 10px",
                 borderRadius: 4,
                 border: `1px solid ${COLORS.line}`,
-                background: "#FFFDF8",
+                background: "var(--c-inputBg)",
                 color: COLORS.ink,
                 cursor: "pointer",
               }}
@@ -1384,7 +1337,7 @@ function FamilyTree({ family, onSelect, onBack }) {
             return (
               <g key={g.id} onClick={() => onSelect(g.id)} style={{ cursor: "pointer" }}>
                 <circle cx={cx} cy={cy} r="26" fill={g.isKeeper ? COLORS.plum : COLORS.paperDeep} stroke={g.isKeeper ? COLORS.plum : COLORS.line} strokeWidth="2" />
-                <text x={cx} y={cy + 4} textAnchor="middle" fontSize="12" fontFamily="'JetBrains Mono', monospace" fill={g.isKeeper ? "#F7F1EA" : COLORS.ink}>
+                <text x={cx} y={cy + 4} textAnchor="middle" fontSize="12" fontFamily="'JetBrains Mono', monospace" fill={g.isKeeper ? "var(--c-onAccent)" : COLORS.ink}>
                   {idx}
                 </text>
                 <text x={cx} y={cy + 44} textAnchor="middle" fontSize="12" fontFamily="'Inter', sans-serif" fontWeight="500" fill={COLORS.ink}>
@@ -1607,7 +1560,7 @@ function PhotoField({ image, onChange, size = 64 }) {
           </label>
         )}
       </div>
-      {imgError && <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>}
+      {imgError && <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>}
     </div>
   );
 }
@@ -1621,7 +1574,7 @@ function pillStyle(active) {
     borderRadius: 20,
     border: `1px solid ${active ? COLORS.plum : COLORS.line}`,
     background: active ? COLORS.plum : "transparent",
-    color: active ? "#F7F1EA" : COLORS.inkSoft,
+    color: active ? "var(--c-onAccent)" : COLORS.inkSoft,
     cursor: "pointer",
   };
 }
@@ -1734,7 +1687,7 @@ function MealItemSlot({ slot, value, pantry, families, macroIndex = {}, onChange
             return (
               <span
                 key={item}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "3px 6px 3px 9px", borderRadius: 20, border: `1px solid ${COLORS.line}`, background: "var(--c-inputBg)", color: COLORS.ink }}
               >
                 {item}
                 {m && <span style={{ color: COLORS.inkSoft, fontSize: 10.5 }}>· {Math.round(m.calories)}cal</span>}
@@ -1798,7 +1751,7 @@ function MealItemSlot({ slot, value, pantry, families, macroIndex = {}, onChange
                   key={item}
                   type="button"
                   onClick={() => addItem(item)}
-                  style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 9px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink, cursor: "pointer" }}
+                  style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 9px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "var(--c-inputBg)", color: COLORS.ink, cursor: "pointer" }}
                 >
                   + {item}
                 </button>
@@ -1843,7 +1796,7 @@ function MealItemSlot({ slot, value, pantry, families, macroIndex = {}, onChange
         )}
       </div>
       {imgError && (
-        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>
+        <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 11, marginTop: 3 }}>{imgError}</div>
       )}
     </div>
   );
@@ -1978,7 +1931,7 @@ function WeekPanel({ weekNum, week, pantry, families, macroIndex, onUpdateSlot, 
         </div>
       </div>
       {shuffleError && (
-        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{shuffleError}</div>
+        <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 12 }}>{shuffleError}</div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {WEEK_DAYS.map((day) => (
@@ -2206,7 +2159,7 @@ function PantryManager({ pantry, onUpdatePantry }) {
       </p>
 
       {scanError && (
-        <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 16 }}>{scanError}</div>
+        <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 16 }}>{scanError}</div>
       )}
 
       {scanResult && (
@@ -2241,7 +2194,7 @@ function PantryManager({ pantry, onUpdatePantry }) {
                   return (
                     <span
                       key={item}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 6px 4px 8px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "#FFFDF8", color: COLORS.ink }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "'Inter', sans-serif", fontSize: 12, padding: "4px 6px 4px 8px", borderRadius: 4, border: `1px solid ${COLORS.line}`, background: "var(--c-inputBg)", color: COLORS.ink }}
                     >
                       {item}
                       {macros && (
@@ -2361,23 +2314,63 @@ function ScannedItemConfirm({ result, categories, category, onCategoryChange, on
 // ---------- Login ----------
 
 function Login({ onLogin }) {
-  const [username, setUsername] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [mfaMethod, setMfaMethod] = useState(null); // null | "totp" | "email"
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
-    if (!username.trim() || !password) return;
+    if (mfaMethod) {
+      if (!code.trim()) return;
+      setSubmitting(true);
+      setError("");
+      try {
+        const data = await verifyMfaCode(code.trim());
+        onLogin(data.user);
+      } catch (err) {
+        setError(err.message || "Couldn't verify that code");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    if (!identifier.trim() || !password) return;
     setSubmitting(true);
     setError("");
     try {
-      await login(username.trim(), password);
-      onLogin();
+      const data = await login(identifier.trim(), password);
+      if (data.mfaRequired) {
+        setMfaMethod(data.method);
+        if (data.emailError) setError(data.emailError);
+      } else {
+        onLogin(data.user);
+      }
     } catch (err) {
       setError(err.message || "Couldn't log in");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function usePasskey() {
+    if (!identifier.trim()) {
+      setError("Type your email or name first, then use Face ID.");
+      return;
+    }
+    setPasskeyBusy(true);
+    setError("");
+    try {
+      const data = await passkeyLogin(identifier.trim());
+      onLogin(data.user);
+    } catch (err) {
+      setError(err.message || "Couldn't sign in with Face ID.");
+    } finally {
+      setPasskeyBusy(false);
     }
   }
 
@@ -2388,37 +2381,88 @@ function Login({ onLogin }) {
           Dame and Ems&rsquo; Cookbook
         </h2>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: COLORS.inkSoft, marginBottom: 22, textAlign: "center" }}>
-          Log in to see the shelf.
+          {mfaMethod
+            ? mfaMethod === "email"
+              ? "Enter the code we emailed you."
+              : "Enter the code from your authenticator app."
+            : "Log in to see the shelf."}
         </p>
 
-        <Field label="Username">
-          <input
-            style={inputStyle}
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            autoFocus
-          />
-        </Field>
-        <Field label="Password">
-          <input
-            type="password"
-            style={inputStyle}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-          />
-        </Field>
+        {!mfaMethod && (
+          <>
+            <Field label="Email or name">
+              <input
+                style={inputStyle}
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                autoComplete="username"
+                autoFocus
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                type="password"
+                style={inputStyle}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </Field>
+          </>
+        )}
+
+        {mfaMethod && (
+          <Field label="6-digit code">
+            <input
+              style={{ ...inputStyle, letterSpacing: "0.2em", textAlign: "center", fontSize: 18 }}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              inputMode="numeric"
+              autoFocus
+            />
+          </Field>
+        )}
 
         {error && (
-          <div style={{ color: "#8C3B2E", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 14 }}>
+          <div style={{ color: "var(--c-danger)", fontFamily: "'Inter', sans-serif", fontSize: 12.5, marginBottom: 14 }}>
             {error}
           </div>
         )}
 
-        <Button type="submit" style={{ width: "100%" }}>
-          {submitting ? "Logging in…" : "Log in"}
+        <Button type="submit" style={{ width: "100%" }} disabled={submitting}>
+          {submitting ? "Working…" : mfaMethod ? "Verify" : "Log in"}
         </Button>
+
+        {!mfaMethod && (
+          <>
+            <div style={{ textAlign: "center", margin: "14px 0", fontFamily: "'Inter', sans-serif", fontSize: 11, color: COLORS.inkSoft }}>
+              or
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              style={{ width: "100%" }}
+              onClick={usePasskey}
+              disabled={passkeyBusy}
+            >
+              {passkeyBusy ? "Waiting for Face ID…" : "🔐 Use Face ID instead"}
+            </Button>
+          </>
+        )}
+
+        {mfaMethod && (
+          <button
+            type="button"
+            onClick={() => {
+              setMfaMethod(null);
+              setCode("");
+              setError("");
+            }}
+            style={{ marginTop: 12, border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11.5, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline", display: "block", width: "100%", textAlign: "center" }}
+          >
+            back to password
+          </button>
+        )}
       </form>
     </div>
   );
@@ -2434,12 +2478,20 @@ export default function App() {
   const [syncError, setSyncError] = useState(false);
   const [view, setView] = useState({ screen: "shelf" });
   const [authStatus, setAuthStatus] = useState("checking"); // "checking" | "out" | "in"
+  const [currentUser, setCurrentUser] = useState(null);
+  const [season] = useState(currentSeason);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = season === "fall" ? "dark-fall" : "";
+  }, [season]);
 
   useEffect(() => {
     let cancelled = false;
     checkSession()
-      .then((authed) => {
-        if (!cancelled) setAuthStatus(authed ? "in" : "out");
+      .then(({ authed, user }) => {
+        if (cancelled) return;
+        if (authed) setCurrentUser(user);
+        setAuthStatus(authed ? "in" : "out");
       })
       .catch(() => {
         if (!cancelled) setAuthStatus("out");
@@ -2526,6 +2578,7 @@ export default function App() {
   function handleLogout() {
     logout().finally(() => {
       setFamilies([]);
+      setCurrentUser(null);
       setView({ screen: "shelf" });
       setAuthStatus("out");
     });
@@ -2691,12 +2744,20 @@ export default function App() {
 
   if (authStatus === "out") {
     return (
-      <div style={{ background: COLORS.paper, minHeight: "100vh", color: COLORS.ink }}>
+      <div style={{ background: COLORS.paper, minHeight: "100vh", color: COLORS.ink, position: "relative" }}>
         <style>{FONTS_IMPORT}{`
           * { box-sizing: border-box; }
           input:focus { outline: 2px solid ${COLORS.plum}; outline-offset: 1px; }
         `}</style>
-        <Login onLogin={() => setAuthStatus("in")} />
+        <SeasonalBackground season={season} />
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <Login
+            onLogin={(user) => {
+              setCurrentUser(user);
+              setAuthStatus("in");
+            }}
+          />
+        </div>
       </div>
     );
   }
@@ -2712,25 +2773,31 @@ export default function App() {
   const activeFamily = view.familyId ? families.find((f) => f.id === view.familyId) : null;
 
   return (
-    <div style={{ background: COLORS.paper, minHeight: "100vh", color: COLORS.ink }}>
+    <div style={{ background: COLORS.paper, minHeight: "100vh", color: COLORS.ink, position: "relative" }}>
       <style>{FONTS_IMPORT}{`
         * { box-sizing: border-box; }
         input:focus, select:focus, textarea:focus { outline: 2px solid ${COLORS.plum}; outline-offset: 1px; }
       `}</style>
+      <SeasonalBackground season={season} />
 
-      <div style={{ maxWidth: 880, margin: "0 auto", padding: "0 24px" }}>
-        <div style={{ paddingTop: 36, paddingBottom: 8 }}>
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.14em", color: COLORS.mustard, marginBottom: 4 }}>
-            a cookbook that keeps evolving
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "0 24px", position: "relative", zIndex: 1 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, paddingTop: 36, paddingBottom: 8 }}>
+          <div>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.14em", color: COLORS.mustard, marginBottom: 4 }}>
+              a cookbook that keeps evolving
+            </div>
+            <h1 style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 36, fontWeight: 500, margin: 0, color: COLORS.ink }}>
+              <span>Dame and Ems&rsquo; Cookbook</span>
+              <img
+                src={COVER_LOGO}
+                alt="Dame and Em, cooking up memories"
+                style={{ width: 52, height: 52, borderRadius: "50%", border: `2px solid ${COLORS.mustard}`, objectFit: "cover", flexShrink: 0 }}
+              />
+            </h1>
           </div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 36, fontWeight: 500, margin: 0, color: COLORS.ink }}>
-            <span>Dame and Ems&rsquo; Cookbook</span>
-            <img
-              src={COVER_LOGO}
-              alt="Dame and Em, cooking up memories"
-              style={{ width: 52, height: 52, borderRadius: "50%", border: `2px solid ${COLORS.mustard}`, objectFit: "cover", flexShrink: 0 }}
-            />
-          </h1>
+          <div style={{ paddingTop: 6 }}>
+            <Settings currentUser={currentUser} onUserUpdate={setCurrentUser} />
+          </div>
         </div>
 
         {syncError && (

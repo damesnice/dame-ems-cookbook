@@ -797,3 +797,124 @@ view, editing its name in place, then removing it again directly through
 `/api/families` (the delete button itself opens a native `confirm()`
 dialog, which browser automation can't click through safely) — verified
 the three real recipes were untouched throughout.
+
+## 2026-08-20 — Individual accounts, MFA, Face ID, an audit trail, and a seasonal dark theme
+
+**What:** Replaced the single shared household login with real per-person
+accounts, added two-factor authentication (authenticator app or email
+codes), Face ID/passkey sign-in, an unlimited-retention audit trail with
+restore, a Settings dropdown to host all of it, and a seasonal background
+that goes dark and animated for fall.
+
+**Why:** Damon wanted Face ID and MFA to actually mean something ("who" is
+enrolled, not "the household"), plus a way to undo an accidental recipe
+edit or delete. All of this was prototyped first in an isolated local
+preview (throwaway Redis instance, no production access) before landing
+here — see the plan this was built from for the full design rationale.
+
+**Accounts and sessions (`api/_auth.js`, `api/_users.js`,
+`api/_default-users.js`, `api/_passwords.js`, `api/login.js`):** the old
+single static session cookie (`sha256(COOKBOOK_SESSION_SECRET)`, same for
+everyone) is replaced with real per-user Redis-backed sessions
+(`session:<random token>` → `{userId}`). `COOKBOOK_USERNAME`/
+`COOKBOOK_PASSWORD` now only seed the two initial accounts the first time
+`users` is read empty (same seed-once pattern `_default-pantry.js` already
+used for the pantry) — after that, credentials live in the `users` Redis
+key and are self-managed from Settings. Passwords are hashed with Node's
+built-in `crypto.scrypt`, no new dependency. Login now accepts a name or
+email as the identifier:
+
+```js
+// api/login.js
+const users = await getUsers();
+const user = findByIdentifier(users, identifier);
+const ok = user && verifyPassword(password, user.passwordHash);
+```
+
+**MFA (`api/_totp.js`, `api/_otp-store.js`, `api/_email.js`,
+`api/account-mfa.js`, `api/mfa-verify.js`):** TOTP is hand-rolled (RFC
+6238, `crypto.createHmac`, no library) since it's a small, well-defined
+algorithm — enrollment shows a manual base32 secret rather than a
+scannable QR code (zero new dependency). Email one-time codes go through
+`nodemailer`, gated behind `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS` — unset in
+production for now, so that path shows a clear "not set up yet" error
+instead of crashing, the same pattern the USDA lookup already used for its
+optional API key. A short-lived signed cookie (HMAC'd with
+`COOKBOOK_SESSION_SECRET`, no server storage) carries a login through the
+gap between password and code.
+
+**Face ID (`api/_webauthn.js`, `api/passkey-register.js`,
+`api/passkey-login.js`):** WebAuthn via `@simplewebauthn/server` +
+`@simplewebauthn/browser` — hand-rolling attestation/signature
+verification isn't worth the risk, unlike TOTP. Passkey login skips
+password and MFA entirely; the passkey's own user-verification step
+(Face ID/Touch ID) *is* the second factor. Needs `WEBAUTHN_RP_ID`/
+`WEBAUTHN_ORIGIN` set to this app's real domain in Vercel — these can't
+gracefully degrade like the SMTP/USDA config gates since option-generation
+needs a concrete value to return anything at all.
+
+**Audit trail (`api/_audit.js`, `api/audit.js`,
+`api/audit-restore.js`):** every `families`/`pantry`/`mealplan` `PUT` now
+diffs old vs. new (by recipe `id` for families — create/edit/delete;
+whole-blob for pantry/mealplan) and appends the result to an
+`audit:<type>` Redis list via `LPUSH`, with **no `EX`/`LTRIM` anywhere** —
+that's the literal mechanism for keeping everything forever. Restoring an
+entry writes its `before` snapshot back as current and logs the restore
+itself as a new entry, so history is only ever appended to, never
+rewritten:
+
+```js
+// api/_audit.js
+export function diffFamilies(before, after, user) {
+  // only-in-after -> create, only-in-before -> delete,
+  // present in both but changed -> edit
+}
+```
+
+**Settings UI (`src/Settings.jsx`, new file):** broke the app's
+single-file convention on purpose here — this feature set is ~900+ lines
+on its own, and folding it into the already-2800-line `App.jsx` would have
+pushed it well past 4000. Lives behind a small circular 🍁 button in the
+top-right of the header (`SettingsMenu`, replacing what was briefly a
+"Settings" tab) that opens a dropdown; each section (account, two-factor,
+Face ID, activity & restore) is its own collapsible accordion rather than
+one long scrolling page. `src/ui.jsx` (also new) holds `COLORS`/`Button`/
+`Field`/`inputStyle`/`Tab` so `Settings.jsx` can import them without a
+circular `App.jsx` ↔ `Settings.jsx` dependency.
+
+**Seasonal theme (`src/SeasonalBackground.jsx`, new file; `index.html`;
+`src/App.jsx`):** a fixed backdrop behind all content, season derived from
+the calendar. Fall specifically runs a real, deliberate dark theme — not a
+browser dark-mode override — built via CSS custom properties
+(`COLORS.ink` etc. now point at `var(--c-ink)`) so a single
+`html[data-theme="dark-fall"]` rule repaints the whole app at once instead
+of threading a theme object through every component. The static light/dark
+variable blocks live in `index.html` so they're present from first paint,
+before React ever mounts. The fall scene itself is a hand-built SVG tree
+(branch network, bark texture, ~260 individually-scattered leaf shapes
+rather than flat blobs), a tire swing with the app's own cover photo riding
+in it, and two kid silhouettes hopping in a leaf pile at the base — all
+built from inline SVG/CSS, no new dependency.
+
+**Migration notes:**
+- Existing sessions invalidate the moment this deploys (old shared cookie
+  won't match any new per-user session) — Dame and Emma each hit a
+  one-time logout, then log back in with the same password as always.
+- The 51-recipe question doesn't apply here: recipe data was never part of
+  this change. Everything added while prototyping lived only in the
+  preview's throwaway Redis instance and was never brought over — this
+  merge is code only.
+- `getSeason()` currently folds summer into fall's window (returns "fall"
+  for everything outside spring/winter) at Damon's request, to keep the
+  dark theme running through the actual current summer months until winter.
+  Worth revisiting before next year's real summer if the intent was just
+  "for now."
+
+**Verify it:** `npm run lint && npm run build` — both clean. Full manual
+pass done first in the isolated local preview (login, TOTP enroll +
+login, Face ID register + login, edit/delete a recipe, confirm both show
+in Activity, restore the deleted one) before this code ever reached this
+repo. Still needs, on the real deployment: `WEBAUTHN_RP_ID`/
+`WEBAUTHN_ORIGIN` set in Vercel to the production domain, and a real
+Face ID pass against the live HTTPS URL (passkeys were only verified
+against `localhost`'s WebAuthn secure-context exception until now).

@@ -1,11 +1,12 @@
-import { isAuthed } from "./_auth.js";
+import { requireUser } from "./_auth.js";
 
 // USDA FoodData Central — free, keyless (DEMO_KEY) to start. DEMO_KEY is
 // shared across everyone using it and rate-limited (30/hr, 1000/day per
 // IP); set USDA_API_KEY in Vercel env with a personal free key from
 // https://fdc.nal.usda.gov/api-key-signup.html if that ever gets hit.
 export default async function handler(req, res) {
-  if (!isAuthed(req)) {
+  const user = await requireUser(req);
+  if (!user) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }

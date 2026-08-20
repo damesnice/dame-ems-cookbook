@@ -6,11 +6,31 @@
   <title>Dame and Ems' Cookbook</title>
   <meta name="description" content="A cookbook that keeps evolving" />
   <meta name="theme-color" content="#EFE9D8" />
+  <meta name="color-scheme" content="light" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Dame & Em" />
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <style>
+    /* Default (light) theme vars, always present from first paint —
+       [data-theme="dark-fall"] (set by App.jsx once season is known)
+       overrides these; kept static here so there's never a flash where
+       COLORS.* vars resolve to nothing before React's first render. */
+    :root {
+      --c-paper: #EFE9D8; --c-paperDeep: #E5DEC8; --c-ink: #24291F; --c-inkSoft: #5B5A4D;
+      --c-plum: #6B3557; --c-plumSoft: #8A5473; --c-mustard: #C79A3D; --c-moss: #4C6B4C;
+      --c-line: #D2C9AE; --c-card: #F7F3E6; --c-inputBg: #FFFDF8; --c-onAccent: #F7F1EA;
+      --c-danger: #8C3B2E;
+    }
+    html[data-theme="dark-fall"] {
+      --c-paper: #1C1712; --c-paperDeep: #140F0B; --c-ink: #F0E6D6; --c-inkSoft: #C9B8A0;
+      --c-plum: #B5541F; --c-plumSoft: #D98A3D; --c-mustard: #E0A83D; --c-moss: #7A9B6E;
+      --c-line: #3E332A; --c-card: #241C15; --c-inputBg: #2A2119; --c-onAccent: #241C15;
+      --c-danger: #E0836A;
+    }
+    body { background: var(--c-paper); }
+  </style>
 </head>
 <body>
   <div id="root"></div>

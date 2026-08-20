@@ -1,11 +1,13 @@
 import { Redis } from "@upstash/redis";
-import { isAuthed } from "./_auth.js";
+import { requireUser } from "./_auth.js";
+import { appendAuditEntries, logBlobChange } from "./_audit.js";
 
 const redis = Redis.fromEnv();
 const KEY = "mealplan";
 
 export default async function handler(req, res) {
-  if (!isAuthed(req)) {
+  const user = await requireUser(req);
+  if (!user) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }
@@ -22,7 +24,9 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Expected a meal plan object with a weeks map" });
       return;
     }
+    const before = (await redis.get(KEY)) || { weeks: {} };
     await redis.set(KEY, mealPlan);
+    await appendAuditEntries("mealplan", logBlobChange("mealplan", before, mealPlan, user));
     res.status(200).json({ ok: true });
     return;
   }
