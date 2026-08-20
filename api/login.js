@@ -1,51 +1,63 @@
-import crypto from "crypto";
-import { isAuthed, setSessionCookie, clearSessionCookie } from "./_auth.js";
+import {
+  clearPendingMfaCookie,
+  clearSessionCookie,
+  createSession,
+  requireUser,
+  setPendingMfaCookie,
+  setSessionCookie,
+} from "./_auth.js";
+import { sendOTPEmail } from "./_email.js";
+import { issueEmailOTP } from "./_otp-store.js";
+import { findByIdentifier, getUsers, sanitizeUser } from "./_users.js";
+import { verifyPassword } from "./_passwords.js";
 
-function timingSafeStringEqual(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-export default function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method === "GET") {
-    res.status(200).json({ authed: isAuthed(req) });
+    const user = await requireUser(req);
+    res.status(200).json({ authed: !!user, user: sanitizeUser(user) });
     return;
   }
 
   if (req.method === "POST") {
-    const expectedUsers = (process.env.COOKBOOK_USERNAME || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const expectedPass = process.env.COOKBOOK_PASSWORD;
-    if (!expectedUsers.length || !expectedPass) {
-      res.status(500).json({ error: "Login isn't configured yet." });
+    const { identifier, password } = req.body || {};
+    if (typeof identifier !== "string" || typeof password !== "string") {
+      res.status(400).json({ error: "Missing identifier or password." });
       return;
     }
 
-    const { username, password } = req.body || {};
-    const usernameOk =
-      typeof username === "string" &&
-      expectedUsers.some((u) => timingSafeStringEqual(username, u));
-    const ok =
-      usernameOk &&
-      typeof password === "string" &&
-      timingSafeStringEqual(password, expectedPass);
-
+    const users = await getUsers();
+    const user = findByIdentifier(users, identifier);
+    const ok = user && verifyPassword(password, user.passwordHash);
     if (!ok) {
-      res.status(401).json({ error: "Wrong username or password." });
+      res.status(401).json({ error: "Wrong email/name or password." });
       return;
     }
 
-    setSessionCookie(res);
-    res.status(200).json({ ok: true });
+    const method = user.mfa?.method || null;
+    if (!method) {
+      const token = await createSession(user.id);
+      setSessionCookie(res, token);
+      res.status(200).json({ ok: true, mfaRequired: false, user: sanitizeUser(user) });
+      return;
+    }
+
+    setPendingMfaCookie(res, user.id, method);
+    if (method === "email") {
+      try {
+        const code = await issueEmailOTP(user.id);
+        await sendOTPEmail(user.email, code);
+      } catch (err) {
+        res.status(200).json({ ok: true, mfaRequired: true, method, emailError: err.message });
+        return;
+      }
+    }
+    res.status(200).json({ ok: true, mfaRequired: true, method });
     return;
   }
 
   if (req.method === "DELETE") {
     clearSessionCookie(res);
+    clearPendingMfaCookie(res);
     res.status(200).json({ ok: true });
     return;
   }

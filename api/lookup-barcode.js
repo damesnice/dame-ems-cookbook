@@ -1,9 +1,10 @@
-import { isAuthed } from "./_auth.js";
+import { requireUser } from "./_auth.js";
 
 // Open Food Facts — free, keyless, community-run product database. No
 // signup, no billing, no rate-limit tier to worry about.
 export default async function handler(req, res) {
-  if (!isAuthed(req)) {
+  const user = await requireUser(req);
+  if (!user) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }

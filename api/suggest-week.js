@@ -1,4 +1,4 @@
-import { isAuthed } from "./_auth.js";
+import { requireUser } from "./_auth.js";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -47,7 +47,8 @@ function cyclingPicker(pool) {
 }
 
 export default async function handler(req, res) {
-  if (!isAuthed(req)) {
+  const user = await requireUser(req);
+  if (!user) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }
