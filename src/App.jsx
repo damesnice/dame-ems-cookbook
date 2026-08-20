@@ -2796,7 +2796,7 @@ export default function App() {
             </h1>
           </div>
           <div style={{ paddingTop: 6 }}>
-            <Settings currentUser={currentUser} onUserUpdate={setCurrentUser} />
+            <Settings currentUser={currentUser} onUserUpdate={setCurrentUser} onLogout={handleLogout} />
           </div>
         </div>
 

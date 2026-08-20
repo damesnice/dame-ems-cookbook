@@ -466,7 +466,7 @@ function ActivitySection() {
 
 // ---------- root: a dropdown menu, top-right, each section its own accordion ----------
 
-export default function SettingsMenu({ currentUser, onUserUpdate }) {
+export default function SettingsMenu({ currentUser, onUserUpdate, onLogout }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
@@ -544,6 +544,18 @@ export default function SettingsMenu({ currentUser, onUserUpdate }) {
           <AccordionItem title="Activity & restore">
             <ActivitySection />
           </AccordionItem>
+          <div style={{ padding: "12px 2px" }}>
+            <Button
+              variant="ghost"
+              style={{ width: "100%" }}
+              onClick={() => {
+                setOpen(false);
+                onLogout();
+              }}
+            >
+              Log out
+            </Button>
+          </div>
         </div>
       )}
     </div>
