@@ -14,7 +14,7 @@ const updateAccount = (patch) =>
   jsonFetch("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 
 const changePassword = (currentPassword, newPassword) =>
-  jsonFetch("/api/account-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) });
+  jsonFetch("/api/account", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) });
 
 const startTotpEnroll = () =>
   jsonFetch("/api/account-mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: "totp" }) });
@@ -33,15 +33,15 @@ const disableMfa = (currentPassword) =>
 
 async function registerPasskey() {
   const { startRegistration } = await import("@simplewebauthn/browser");
-  const optionsJSON = await jsonFetch("/api/passkey-register");
+  const optionsJSON = await jsonFetch("/api/passkey?action=register");
   const response = await startRegistration({ optionsJSON });
-  return jsonFetch("/api/passkey-register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(response) });
+  return jsonFetch("/api/passkey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "register", ...response }) });
 }
 
 const fetchAudit = (type, limit = 30) => jsonFetch(`/api/audit?type=${type}&limit=${limit}`);
 
 const restoreAuditEntry = (type, entryId) =>
-  jsonFetch("/api/audit-restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type, entryId }) });
+  jsonFetch("/api/audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type, entryId }) });
 
 // ---------- accordion shell ----------
 

@@ -204,7 +204,7 @@ async function login(identifier, password) {
 }
 
 async function verifyMfaCode(code) {
-  const res = await fetch("/api/mfa-verify", {
+  const res = await fetch("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code }),
@@ -216,12 +216,12 @@ async function verifyMfaCode(code) {
 
 async function passkeyLogin(identifier) {
   const { startAuthentication } = await import("@simplewebauthn/browser");
-  const optRes = await fetch(`/api/passkey-login?identifier=${encodeURIComponent(identifier)}`);
+  const optRes = await fetch(`/api/passkey?identifier=${encodeURIComponent(identifier)}`);
   const options = await optRes.json().catch(() => ({}));
   if (!optRes.ok) throw new Error(options.error || "No passkey found for that account.");
   const { userId, ...optionsJSON } = options;
   const response = await startAuthentication({ optionsJSON });
-  const verifyRes = await fetch("/api/passkey-login", {
+  const verifyRes = await fetch("/api/passkey", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId, response }),
