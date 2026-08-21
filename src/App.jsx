@@ -501,6 +501,116 @@ function BarcodeScannerModal({ onDetected, onClose }) {
 
 // ---------- Shelf ----------
 
+function RecipeCard({ family: f, onOpen, onDragStart }) {
+  const gen = latestKeeper(f);
+  return (
+    <div
+      onClick={() => onOpen(f.id, gen.id)}
+      draggable
+      onDragStart={onDragStart}
+      style={{
+        background: COLORS.card,
+        border: `1px solid ${COLORS.line}`,
+        borderRadius: 4,
+        padding: "18px 18px 16px",
+        cursor: "pointer",
+        position: "relative",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 20,
+          width: 34,
+          height: 10,
+          background: COLORS.mustard,
+          borderRadius: "0 0 4px 4px",
+        }}
+      />
+      <div
+        style={{
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 10,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          color: COLORS.plum,
+          marginTop: 8,
+          marginBottom: 6,
+        }}
+      >
+        {f.category}
+      </div>
+      {gen.image && (
+        <img
+          src={gen.image}
+          alt=""
+          style={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 3, marginBottom: 10, display: "block" }}
+        />
+      )}
+      <div style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 500, color: COLORS.ink, marginBottom: 8 }}>
+        {f.name}
+      </div>
+      <Stars value={gen.rating || 0} />
+      <div
+        style={{
+          marginTop: 12,
+          paddingTop: 10,
+          borderTop: `1px solid ${COLORS.line}`,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 11,
+          color: COLORS.inkSoft,
+        }}
+      >
+        <span>{f.generations.length > 1 ? `${f.generations.length} versions` : ""}</span>
+        <span>{fmtDate(gen.cookedDate)}</span>
+      </div>
+    </div>
+  );
+}
+
+function RecipeGrid({ families, onOpen }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+        gap: 16,
+      }}
+    >
+      {families.map((f) => (
+        <RecipeCard
+          key={f.id}
+          family={f}
+          onOpen={onOpen}
+          onDragStart={(e) => e.dataTransfer.setData("text/plain", f.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ShelfSectionHeading({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: "'Fraunces', serif",
+        fontSize: 20,
+        fontStyle: "italic",
+        fontWeight: 500,
+        color: COLORS.ink,
+        marginBottom: 14,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Shelf({ families, onOpen, onNew, onRecategorize }) {
   const [filter, setFilter] = useState("All");
   const [dragOverCategory, setDragOverCategory] = useState(null);
@@ -512,6 +622,8 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
     if (f.name.toLowerCase().includes(q)) return true;
     return latestKeeper(f).ingredients.some((i) => i.name.toLowerCase().includes(q));
   });
+  const made = shown.filter((f) => !!latestKeeper(f).cookedDate);
+  const notMade = shown.filter((f) => !latestKeeper(f).cookedDate);
 
   if (families.length === 0) {
     return (
@@ -576,86 +688,20 @@ function Shelf({ families, onOpen, onNew, onRecategorize }) {
           {q ? "No recipes match that search." : "Nothing on the shelf in this category yet."}
         </p>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-            gap: 16,
-          }}
-        >
-          {shown.map((f) => {
-            const gen = latestKeeper(f);
-            return (
-              <div
-                key={f.id}
-                onClick={() => onOpen(f.id, gen.id)}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", f.id)}
-                style={{
-                  background: COLORS.card,
-                  border: `1px solid ${COLORS.line}`,
-                  borderRadius: 4,
-                  padding: "18px 18px 16px",
-                  cursor: "pointer",
-                  position: "relative",
-                }}
-              >
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 20,
-                    width: 34,
-                    height: 10,
-                    background: COLORS.mustard,
-                    borderRadius: "0 0 4px 4px",
-                  }}
-                />
-                <div
-                  style={{
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: 10,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    color: COLORS.plum,
-                    marginTop: 8,
-                    marginBottom: 6,
-                  }}
-                >
-                  {f.category}
-                </div>
-                {gen.image && (
-                  <img
-                    src={gen.image}
-                    alt=""
-                    style={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 3, marginBottom: 10, display: "block" }}
-                  />
-                )}
-                <div style={{ fontFamily: "'Fraunces', serif", fontSize: 19, fontWeight: 500, color: COLORS.ink, marginBottom: 8 }}>
-                  {f.name}
-                </div>
-                <Stars value={gen.rating || 0} />
-                <div
-                  style={{
-                    marginTop: 12,
-                    paddingTop: 10,
-                    borderTop: `1px solid ${COLORS.line}`,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 11,
-                    color: COLORS.inkSoft,
-                  }}
-                >
-                  <span>{f.generations.length > 1 ? `${f.generations.length} versions` : ""}</span>
-                  <span>{fmtDate(gen.cookedDate)}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          {made.length > 0 && (
+            <div style={{ marginBottom: 34 }}>
+              <ShelfSectionHeading>Meals we&rsquo;ve made</ShelfSectionHeading>
+              <RecipeGrid families={made} onOpen={onOpen} />
+            </div>
+          )}
+          {notMade.length > 0 && (
+            <div>
+              <ShelfSectionHeading>{made.length > 0 ? "Recipes to try" : "Recipes"}</ShelfSectionHeading>
+              <RecipeGrid families={notMade} onOpen={onOpen} />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
