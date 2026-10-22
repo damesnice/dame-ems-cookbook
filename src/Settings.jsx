@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, COLORS, Field, inputStyle } from "./ui.jsx";
+import { Button, Field } from "./ui.jsx";
+import { COLORS, inputStyle } from "./theme.js";
 
 // ---------- API helpers ----------
 

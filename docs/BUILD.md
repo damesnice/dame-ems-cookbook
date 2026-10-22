@@ -918,3 +918,18 @@ repo. Still needs, on the real deployment: `WEBAUTHN_RP_ID`/
 `WEBAUTHN_ORIGIN` set in Vercel to the production domain, and a real
 Face ID pass against the live HTTPS URL (passkeys were only verified
 against `localhost`'s WebAuthn secure-context exception until now).
+
+## 2026-10-10 — Clear the fast-refresh lint warnings
+
+**Why:** `eslint` flagged `react-refresh/only-export-components` three
+times: `ui.jsx` exported `COLORS` and `inputStyle`, and
+`SeasonalBackground.jsx` exported `getSeason`. When a component file also
+exports plain values, Vite's hot reload falls back to a full page reload
+instead of swapping the component in place.
+
+**What changed:** the non-component exports moved into plain modules:
+`src/theme.js` (`COLORS`, `inputStyle`) and `src/season.js` (`getSeason`).
+`App.jsx` and `Settings.jsx` now import them from there. Their behavior
+didn't change.
+
+**Verify it:** `npm run lint && npm run build`. Both run clean with 0 problems.

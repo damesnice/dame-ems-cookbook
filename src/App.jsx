@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Settings from "./Settings.jsx";
-import { COLORS, Tab, Button, Field, inputStyle } from "./ui.jsx";
-import SeasonalBackground, { getSeason } from "./SeasonalBackground.jsx";
+import { Tab, Button, Field } from "./ui.jsx";
+import { COLORS, inputStyle } from "./theme.js";
+import SeasonalBackground from "./SeasonalBackground.jsx";
+import { getSeason } from "./season.js";
 
 function currentSeason() {
   if (import.meta.env.DEV) {
