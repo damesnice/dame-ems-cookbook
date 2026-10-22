@@ -1017,3 +1017,5 @@ right.
 "Use Face ID instead" with your name typed in.
 
 **Verified 2026-10-21:** Damon registered Face ID on his phone and signed in with it on production.
+
+**Cleanup 2026-10-21:** `COOKBOOK_PASSWORD` removed from Vercel (production, preview, development), since nothing reads it after the switch to PINs.
