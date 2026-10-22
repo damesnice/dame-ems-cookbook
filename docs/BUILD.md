@@ -1015,3 +1015,5 @@ right.
 
 **Verify it:** register Face ID from Settings on a phone, log out, then use
 "Use Face ID instead" with your name typed in.
+
+**Verified 2026-10-21:** Damon registered Face ID on his phone and signed in with it on production.
