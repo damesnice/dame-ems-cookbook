@@ -999,3 +999,19 @@ At Damon's request, the 48 recipes created on 2026-08-19 and never cooked
 as a `delete` entry with its full contents, so any of them can be restored
 from Settings. `COOKBOOK_ACCOUNTS` was removed from Vercel after both PINs
 worked.
+
+## 2026-10-21 — Face ID production check
+
+**Why:** passkeys were lost with the old database, so Damon and Emma have
+to register Face ID again, this time against production.
+
+**Checked:** the live registration options report
+`rp.id = dame-ems-cookbook.vercel.app`, so `WEBAUTHN_RP_ID` is right.
+`WEBAUTHN_ORIGIN` is a sensitive env var and can't be read back, and a
+wrong value only shows up as an opaque Face ID failure. So `api/_webauthn.js`
+now passes an array to `expectedOrigin` (SimpleWebAuthn 13 accepts one): the
+env value plus `https://<rpID>`. Production now works as long as the RP ID is
+right.
+
+**Verify it:** register Face ID from Settings on a phone, log out, then use
+"Use Face ID instead" with your name typed in.
