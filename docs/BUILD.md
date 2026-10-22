@@ -966,3 +966,21 @@ first successful login.
 
 **Verify it:** `npm run lint && npm run build`, then log in on production
 with each name + PIN.
+
+## 2026-10-21 — Production database found deleted; restore path from device caches
+
+**What happened:** after the PIN deploy, `/api/login` crashed with
+`getaddrinfo ENOTFOUND precise-finch-183024.upstash.io`. The Vercel
+Marketplace Upstash resource (`upstash-kv-violet-pocket`) shows as
+**Uninstalled**, so the Redis database is gone, and with it every recipe,
+meal plan, pantry, user account, passkey and audit entry stored server-side.
+It's unknown when or why it was uninstalled. That's also why nobody could log
+in: the login request was failing, not just a forgotten password.
+
+**Recovery path:** each device that has used the app keeps an offline copy
+of recipes and the meal plan in `localStorage`. `init()` in `App.jsx` already
+pushed cached recipes up when the server returned an empty shelf. This
+change does the same for the meal plan. Once a fresh Redis is attached, the
+first login from a device with a cache restores its copy.
+Accounts come back via the `COOKBOOK_USERNAME` seed plus `COOKBOOK_ACCOUNTS`.
+Passkeys and the audit trail can't be recovered.

@@ -2589,8 +2589,15 @@ export default function App() {
           setFamilies(server);
           cacheFamilies(server);
         }
-        setMealPlan(serverPlan);
-        cacheMealPlan(serverPlan);
+        const serverPlanEmpty = !Object.keys(serverPlan.weeks || {}).length;
+        if (serverPlanEmpty && cachedPlan && Object.keys(cachedPlan.weeks || {}).length) {
+          // same carry-up as recipes, so a wiped server store gets this
+          // device's meal plan back too
+          await pushMealPlan(cachedPlan);
+        } else {
+          setMealPlan(serverPlan);
+          cacheMealPlan(serverPlan);
+        }
         setPantry(serverPantry);
         cachePantry(serverPantry);
         setSyncError(false);
