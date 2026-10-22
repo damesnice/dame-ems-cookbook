@@ -12,6 +12,7 @@ import { issueEmailOTP, verifyEmailOTP } from "./_otp-store.js";
 import { verifyTOTP } from "./_totp.js";
 import { findByIdentifier, findById, getUsers, sanitizeUser } from "./_users.js";
 import { verifyPassword } from "./_passwords.js";
+import { clearFailedPins, isLockedOut, recordFailedPin } from "./_pin.js";
 
 // Also handles the second MFA step (POST with just {code}) — folded in here
 // rather than a separate route to stay under Vercel's Hobby-plan serverless
@@ -57,25 +58,35 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { identifier, password, code } = req.body || {};
+    const { identifier, pin, code } = req.body || {};
 
     if (code !== undefined) {
       await verifyMfaCode(req, res);
       return;
     }
 
-    if (typeof identifier !== "string" || typeof password !== "string") {
-      res.status(400).json({ error: "Missing identifier or password." });
+    if (typeof identifier !== "string" || typeof pin !== "string") {
+      res.status(400).json({ error: "Missing name or PIN." });
       return;
     }
 
     const users = await getUsers();
     const user = findByIdentifier(users, identifier);
-    const ok = user && verifyPassword(password, user.passwordHash);
-    if (!ok) {
-      res.status(401).json({ error: "Wrong email/name or password." });
+    if (!user) {
+      res.status(401).json({ error: "Wrong name or PIN." });
       return;
     }
+
+    if (await isLockedOut(user.id)) {
+      res.status(429).json({ error: "Too many wrong PINs. Try again in 15 minutes." });
+      return;
+    }
+    if (!verifyPassword(pin, user.pinHash)) {
+      await recordFailedPin(user.id);
+      res.status(401).json({ error: "Wrong name or PIN." });
+      return;
+    }
+    await clearFailedPins(user.id);
 
     const method = user.mfa?.method || null;
     if (!method) {

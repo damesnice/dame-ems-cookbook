@@ -78,9 +78,9 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "DELETE") {
-    const { currentPassword } = req.body || {};
-    if (!verifyPassword(currentPassword || "", user.passwordHash)) {
-      res.status(401).json({ error: "Current password is wrong." });
+    const { currentPin } = req.body || {};
+    if (!verifyPassword(currentPin || "", user.pinHash)) {
+      res.status(401).json({ error: "Current PIN is wrong." });
       return;
     }
     const users = await getUsers();

@@ -14,8 +14,8 @@ async function jsonFetch(url, options) {
 const updateAccount = (patch) =>
   jsonFetch("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
 
-const changePassword = (currentPassword, newPassword) =>
-  jsonFetch("/api/account", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) });
+const changePin = (currentPin, newPin) =>
+  jsonFetch("/api/account", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPin, newPin }) });
 
 const startTotpEnroll = () =>
   jsonFetch("/api/account-mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: "totp" }) });
@@ -29,8 +29,8 @@ const startEmailEnroll = () =>
 const confirmEmailEnroll = (confirmCode) =>
   jsonFetch("/api/account-mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: "email", confirmCode }) });
 
-const disableMfa = (currentPassword) =>
-  jsonFetch("/api/account-mfa", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword }) });
+const disableMfa = (currentPin) =>
+  jsonFetch("/api/account-mfa", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPin }) });
 
 async function registerPasskey() {
   const { startRegistration } = await import("@simplewebauthn/browser");
@@ -101,10 +101,10 @@ function AccountSection({ currentUser, onUserUpdate }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState(null);
 
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordMsg, setPasswordMsg] = useState(null);
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [savingPin, setSavingPin] = useState(false);
+  const [pinMsg, setPinMsg] = useState(null);
 
   async function saveProfile(e) {
     e.preventDefault();
@@ -121,19 +121,19 @@ function AccountSection({ currentUser, onUserUpdate }) {
     }
   }
 
-  async function savePassword(e) {
+  async function savePin(e) {
     e.preventDefault();
-    setSavingPassword(true);
-    setPasswordMsg(null);
+    setSavingPin(true);
+    setPinMsg(null);
     try {
-      await changePassword(currentPassword, newPassword);
-      setCurrentPassword("");
-      setNewPassword("");
-      setPasswordMsg({ text: "Password changed.", tone: "ok" });
+      await changePin(currentPin, newPin);
+      setCurrentPin("");
+      setNewPin("");
+      setPinMsg({ text: "PIN changed.", tone: "ok" });
     } catch (err) {
-      setPasswordMsg({ text: err.message, tone: "error" });
+      setPinMsg({ text: err.message, tone: "error" });
     } finally {
-      setSavingPassword(false);
+      setSavingPin(false);
     }
   }
 
@@ -154,15 +154,15 @@ function AccountSection({ currentUser, onUserUpdate }) {
       </form>
 
       <div style={{ borderTop: `1px solid ${COLORS.line}`, paddingTop: 16 }}>
-        <form onSubmit={savePassword}>
-          <Field label="Current password">
-            <input style={inputStyle} type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" />
+        <form onSubmit={savePin}>
+          <Field label="Current PIN">
+            <input style={inputStyle} type="password" inputMode="numeric" value={currentPin} onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 8))} autoComplete="current-password" />
           </Field>
-          <Field label="New password">
-            <input style={inputStyle} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+          <Field label="New PIN (4–8 digits)">
+            <input style={inputStyle} type="password" inputMode="numeric" value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 8))} autoComplete="new-password" />
           </Field>
-          <Button type="submit" variant="ghost" disabled={savingPassword}>{savingPassword ? "Saving…" : "Change password"}</Button>
-          <Msg text={passwordMsg?.text} tone={passwordMsg?.tone} />
+          <Button type="submit" variant="ghost" disabled={savingPin}>{savingPin ? "Saving…" : "Change PIN"}</Button>
+          <Msg text={pinMsg?.text} tone={pinMsg?.tone} />
         </form>
       </div>
     </div>
@@ -176,7 +176,7 @@ function TwoFactorSection({ currentUser, onUserUpdate }) {
   const [pendingMethod, setPendingMethod] = useState(null); // "totp" | "email" while mid-enrollment
   const [secret, setSecret] = useState(null);
   const [code, setCode] = useState("");
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
@@ -230,10 +230,10 @@ function TwoFactorSection({ currentUser, onUserUpdate }) {
     setBusy(true);
     setMsg(null);
     try {
-      const updated = await disableMfa(password);
+      const updated = await disableMfa(pin);
       onUserUpdate(updated);
       setMethod(null);
-      setPassword("");
+      setPin("");
       setMsg({ text: "Two-factor disabled.", tone: "ok" });
     } catch (err) {
       setMsg({ text: err.message, tone: "error" });
@@ -248,8 +248,8 @@ function TwoFactorSection({ currentUser, onUserUpdate }) {
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: "0 0 14px" }}>
           Currently on: {method === "totp" ? "authenticator app" : "email codes"}.
         </p>
-        <Field label="Current password (to disable)">
-          <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+        <Field label="Current PIN (to disable)">
+          <input style={inputStyle} type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} autoComplete="current-password" />
         </Field>
         <Button variant="danger" onClick={disable} disabled={busy}>{busy ? "Working…" : "Disable two-factor"}</Button>
         <Msg text={msg?.text} tone={msg?.tone} />
@@ -288,7 +288,7 @@ function TwoFactorSection({ currentUser, onUserUpdate }) {
   return (
     <div>
       <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: "0 0 14px" }}>
-        Add a second step at login, on top of your password.
+        Add a second step at login, on top of your PIN.
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Button onClick={beginTotp} disabled={busy}>Use an authenticator app</Button>
@@ -322,7 +322,7 @@ function FaceIdSection({ currentUser, onUserUpdate }) {
   return (
     <div>
       <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, margin: "0 0 14px" }}>
-        Registers this device&rsquo;s Face ID / Touch ID as a passkey — sign in with biometrics instead of your password.
+        Registers this device&rsquo;s Face ID / Touch ID as a passkey — sign in with biometrics instead of your PIN.
       </p>
       <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 12 }}>
         {currentUser.passkeyCount > 0

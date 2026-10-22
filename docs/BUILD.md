@@ -933,3 +933,36 @@ instead of swapping the component in place.
 didn't change.
 
 **Verify it:** `npm run lint && npm run build`. Both run clean with 0 problems.
+
+## 2026-10-21 — Name + PIN login instead of email/name + password
+
+**Why:** Damon found the password login annoying and nobody could
+remember the production password, so both accounts were locked out.
+Damon briefly asked for no login at all, then settled on name + PIN as the
+lower-friction option that still keeps the cookbook private.
+
+**What changed:**
+- Login takes a name and a 4–8 digit PIN (`pin` instead of `password` in
+  the `/api/login` POST body). The PIN is stored as `pinHash` using the same
+  scrypt helper as the old passwords, and `passwordHash` is dropped.
+- `api/_pin.js` adds a lockout: 5 wrong PINs locks that account for 15
+  minutes (`pinfail:<userId>` counter in Redis). A short numeric secret is
+  only safe with that cap on guessing.
+- Settings: "Change password" became "Change PIN". Disabling two-factor
+  now asks for the current PIN.
+- `COOKBOOK_PASSWORD` is no longer read. Newly seeded accounts have no PIN
+  until the setup below gives them one.
+
+**Getting back in (one-time account setup):** since no one could log in,
+`getUsers()` in `api/_users.js` applies `COOKBOOK_ACCOUNTS`
+(`Name:PIN,Name:PIN`, set as a sensitive Vercel env var, never committed).
+Each entry renames and re-PINs the account with that name. If no name
+matches exactly, it uses the only account starting with the same letter,
+since the stored names were unknown ("Dame" may have been "Damon"). That
+keeps each account's id, so the audit history, MFA and passkeys stay
+attached. A given value is applied once (a hash marker in Redis), so a
+later PIN change from Settings isn't undone. Remove the env var after the
+first successful login.
+
+**Verify it:** `npm run lint && npm run build`, then log in on production
+with each name + PIN.

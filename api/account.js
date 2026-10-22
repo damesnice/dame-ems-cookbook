@@ -1,8 +1,9 @@
 import { requireUser } from "./_auth.js";
 import { findById, getUsers, saveUsers, sanitizeUser } from "./_users.js";
 import { hashPassword, verifyPassword } from "./_passwords.js";
+import { isValidPin } from "./_pin.js";
 
-// Also handles password changes (POST) — folded in here rather than a
+// Also handles PIN changes (POST) — folded in here rather than a
 // separate route to stay under Vercel's Hobby-plan serverless function cap.
 export default async function handler(req, res) {
   const user = await requireUser(req);
@@ -37,22 +38,22 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { currentPassword, newPassword } = req.body || {};
-    if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
-      res.status(400).json({ error: "Missing currentPassword or newPassword." });
+    const { currentPin, newPin } = req.body || {};
+    if (typeof currentPin !== "string" || typeof newPin !== "string") {
+      res.status(400).json({ error: "Missing currentPin or newPin." });
       return;
     }
-    if (newPassword.length < 8) {
-      res.status(400).json({ error: "New password needs to be at least 8 characters." });
+    if (!isValidPin(newPin)) {
+      res.status(400).json({ error: "New PIN needs to be 4 to 8 digits." });
       return;
     }
-    if (!verifyPassword(currentPassword, user.passwordHash)) {
-      res.status(401).json({ error: "Current password is wrong." });
+    if (!verifyPassword(currentPin, user.pinHash)) {
+      res.status(401).json({ error: "Current PIN is wrong." });
       return;
     }
     const users = await getUsers();
     const current = findById(users, user.id);
-    current.passwordHash = hashPassword(newPassword);
+    current.pinHash = hashPassword(newPin);
     current.updatedAt = new Date().toISOString();
     await saveUsers(users);
     res.status(200).json({ ok: true });

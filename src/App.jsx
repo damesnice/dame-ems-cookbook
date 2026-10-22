@@ -194,11 +194,11 @@ async function checkSession() {
   return { authed: !!data.authed, user: data.user || null };
 }
 
-async function login(identifier, password) {
+async function login(identifier, pin) {
   const res = await fetch("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifier, password }),
+    body: JSON.stringify({ identifier, pin }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Couldn't log in");
@@ -2363,7 +2363,7 @@ function ScannedItemConfirm({ result, categories, category, onCategoryChange, on
 
 function Login({ onLogin }) {
   const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
   const [code, setCode] = useState("");
   const [mfaMethod, setMfaMethod] = useState(null); // null | "totp" | "email"
   const [error, setError] = useState("");
@@ -2387,11 +2387,11 @@ function Login({ onLogin }) {
       return;
     }
 
-    if (!identifier.trim() || !password) return;
+    if (!identifier.trim() || !pin) return;
     setSubmitting(true);
     setError("");
     try {
-      const data = await login(identifier.trim(), password);
+      const data = await login(identifier.trim(), pin);
       if (data.mfaRequired) {
         setMfaMethod(data.method);
         if (data.emailError) setError(data.emailError);
@@ -2407,7 +2407,7 @@ function Login({ onLogin }) {
 
   async function usePasskey() {
     if (!identifier.trim()) {
-      setError("Type your email or name first, then use Face ID.");
+      setError("Type your name first, then use Face ID.");
       return;
     }
     setPasskeyBusy(true);
@@ -2438,7 +2438,7 @@ function Login({ onLogin }) {
 
         {!mfaMethod && (
           <>
-            <Field label="Email or name">
+            <Field label="Name">
               <input
                 style={inputStyle}
                 value={identifier}
@@ -2447,12 +2447,13 @@ function Login({ onLogin }) {
                 autoFocus
               />
             </Field>
-            <Field label="Password">
+            <Field label="PIN">
               <input
                 type="password"
-                style={inputStyle}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                style={{ ...inputStyle, letterSpacing: "0.2em" }}
+                value={pin}
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                inputMode="numeric"
                 autoComplete="current-password"
               />
             </Field>
@@ -2508,7 +2509,7 @@ function Login({ onLogin }) {
             }}
             style={{ marginTop: 12, border: "none", background: "transparent", color: COLORS.inkSoft, fontSize: 11.5, fontFamily: "'Inter', sans-serif", cursor: "pointer", textDecoration: "underline", display: "block", width: "100%", textAlign: "center" }}
           >
-            back to password
+            back to PIN
           </button>
         )}
       </form>
