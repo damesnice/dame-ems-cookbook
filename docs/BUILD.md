@@ -984,3 +984,18 @@ change does the same for the meal plan. Once a fresh Redis is attached, the
 first login from a device with a cache restores its copy.
 Accounts come back via the `COOKBOOK_USERNAME` seed plus `COOKBOOK_ACCOUNTS`.
 Passkeys and the audit trail can't be recovered.
+
+## 2026-10-21 — Restored from a phone's cache; removed the 48 auto-added recipes
+
+A new free Upstash Redis (`cookbook-redis`) was provisioned through the
+Vercel Marketplace and connected to the project, with production
+redeployed. Damon's phone was the first device to log in, and its offline
+copy restored 51 recipes. Damon confirmed the shelf was complete.
+
+At Damon's request, the 48 recipes created on 2026-08-19 and never cooked
+(the seed recipes Claude had added) were deleted through `/api/families`. The
+3 recipes Damon and Emma entered themselves (2 on 2026-08-13 and 1 on
+2026-08-18, all cooked) were kept. Each deleted recipe is in the audit log
+as a `delete` entry with its full contents, so any of them can be restored
+from Settings. `COOKBOOK_ACCOUNTS` was removed from Vercel after both PINs
+worked.
